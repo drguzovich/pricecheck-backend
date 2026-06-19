@@ -3,13 +3,22 @@ services:
     name: pricecheck-backend
     env: node
     plan: free
-    buildCommand: npm install && npx playwright install chromium --with-deps
+    # PLAYWRIGHT_BROWSERS_PATH must be set BEFORE the install so the binary
+    # lands in a path that Render's build cache can persist and the runtime
+    # can find.  --with-deps is omitted because Render's build sandbox does
+    # not allow apt-get / root-level package installs.
+    buildCommand: >-
+      npm install &&
+      PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/.cache/playwright
+      npx playwright install chromium
     startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 10000
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /opt/render/project/.cache/playwright
     disk:
       name: pricecheck-data
       mountPath: /data
