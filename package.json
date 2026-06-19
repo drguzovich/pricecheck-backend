@@ -1,0 +1,21 @@
+{
+  "name": "pricecheck-backend",
+  "version": "1.0.0",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "PriceCheck Phase 1 backend — Woolworths price scraper API",
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "helmet": "^8.2.0",
+    "node-cron": "^4.4.1",
+    "playwright": "^1.61.0"
+  }
+}
