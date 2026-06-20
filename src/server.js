@@ -1,13 +1,14 @@
 'use strict';
 
 const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const cron = require('node-cron');
+const cors    = require('cors');
+const helmet  = require('helmet');
+const cron    = require('node-cron');
 
+const { initSchema }                             = require('./db');
 const { getPrice, forceRefresh, getAllTrackedBarcodes } = require('./priceService');
 
-const app = express();
+const app  = express();
 const PORT = process.env.PORT || 3001;
 
 // ── Middleware ─────────────────────────────────────────────────────────────────
@@ -45,7 +46,7 @@ app.get('/price/:barcode', async (req, res) => {
   // Basic EAN-13 validation (13 digits)
   if (!/^\d{8,14}$/.test(barcode)) {
     return res.status(400).json({
-      error: 'invalid_barcode',
+      error:   'invalid_barcode',
       message: 'Barcode must be 8–14 digits',
     });
   }
@@ -55,32 +56,32 @@ app.get('/price/:barcode', async (req, res) => {
 
     if (!data) {
       return res.status(404).json({
-        error: 'not_found',
+        error:   'not_found',
         message: `No Woolworths listing found for barcode ${barcode}`,
       });
     }
 
     return res.json({
       product: {
-        barcode: data.barcode,
-        name: data.name,
-        brand: data.brand,
+        barcode:   data.barcode,
+        name:      data.name,
+        brand:     data.brand,
         pack_size: data.pack_size,
         image_url: data.image_url,
       },
-      retailer: data.retailer,
-      price: data.price,
-      price_str: data.price_str,
+      retailer:   data.retailer,
+      price:      Number(data.price),   // NUMERIC from Postgres comes as string
+      price_str:  data.price_str,
       scraped_at: data.scraped_at,
-      url: data.url,
+      url:        data.url,
       promo_flag: Boolean(data.promo_flag),
       from_cache: data.from_cache,
-      stale: data.stale || false,
+      stale:      data.stale || false,
     });
   } catch (err) {
     console.error(`[server] Error fetching price for ${barcode}:`, err);
     return res.status(500).json({
-      error: 'scrape_error',
+      error:   'scrape_error',
       message: err.message,
     });
   }
@@ -89,7 +90,6 @@ app.get('/price/:barcode', async (req, res) => {
 // ── POST /price/:barcode/refresh ──────────────────────────────────────────────
 /**
  * Force a fresh scrape for a barcode, bypassing cache.
- * Useful for manual refresh or testing.
  */
 app.post('/price/:barcode/refresh', async (req, res) => {
   const { barcode } = req.params;
@@ -103,24 +103,24 @@ app.post('/price/:barcode/refresh', async (req, res) => {
 
     if (!result.price) {
       return res.status(404).json({
-        error: 'not_found',
+        error:   'not_found',
         message: result.error || `Product not found for barcode ${barcode}`,
       });
     }
 
     return res.json({
       product: {
-        barcode: result.barcode,
-        name: result.name,
-        brand: result.brand,
+        barcode:   result.barcode,
+        name:      result.name,
+        brand:     result.brand,
         pack_size: result.pack_size,
         image_url: result.image_url,
       },
-      retailer: result.retailer,
-      price: result.price,
-      price_str: result.price_str,
+      retailer:   result.retailer,
+      price:      Number(result.price),
+      price_str:  result.price_str,
       scraped_at: result.scraped_at,
-      url: result.url,
+      url:        result.url,
       promo_flag: Boolean(result.promo_flag),
       from_cache: false,
     });
@@ -135,8 +135,8 @@ app.post('/price/:barcode/refresh', async (req, res) => {
  * Manually trigger a refresh of all tracked barcodes.
  * Responds immediately with 202 Accepted; runs in background.
  */
-app.post('/admin/refresh-all', (req, res) => {
-  const barcodes = getAllTrackedBarcodes();
+app.post('/admin/refresh-all', async (req, res) => {
+  const barcodes = await getAllTrackedBarcodes();
   console.log(`[admin] refresh-all triggered for ${barcodes.length} barcodes`);
 
   // Fire and forget
@@ -153,14 +153,14 @@ app.post('/admin/refresh-all', (req, res) => {
   })();
 
   return res.status(202).json({
-    message: `Refresh triggered for ${barcodes.length} barcode(s)`,
+    message:  `Refresh triggered for ${barcodes.length} barcode(s)`,
     barcodes,
   });
 });
 
 // ── Scheduled job: refresh all tracked prices every 6 hours ──────────────────
 cron.schedule('0 */6 * * *', async () => {
-  const barcodes = getAllTrackedBarcodes();
+  const barcodes = await getAllTrackedBarcodes();
   console.log(`[cron] Scheduled refresh for ${barcodes.length} barcodes`);
   for (const barcode of barcodes) {
     try {
@@ -171,11 +171,19 @@ cron.schedule('0 */6 * * *', async () => {
   }
 });
 
-// ── Start server ──────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`[server] PriceCheck backend running on port ${PORT}`);
-  console.log(`[server] Health: http://localhost:${PORT}/health`);
-  console.log(`[server] Price:  http://localhost:${PORT}/price/:barcode`);
-});
+// ── Start server (await schema init first) ────────────────────────────────────
+(async () => {
+  try {
+    await initSchema();
+    app.listen(PORT, () => {
+      console.log(`[server] PriceCheck backend running on port ${PORT}`);
+      console.log(`[server] Health: http://localhost:${PORT}/health`);
+      console.log(`[server] Price:  http://localhost:${PORT}/price/:barcode`);
+    });
+  } catch (err) {
+    console.error('[server] Failed to initialise database schema:', err);
+    process.exit(1);
+  }
+})();
 
 module.exports = app;

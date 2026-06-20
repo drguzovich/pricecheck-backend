@@ -4,9 +4,11 @@
  * Price service — coordinates scraping and DB persistence.
  * Implements a cache-first strategy: serve the last scraped price
  * and refresh in the background (or on-demand via the refresh endpoint).
+ *
+ * All DB calls are async (postgres.js tagged-template queries).
  */
 
-const db = require('./db');
+const { sql } = require('./db');
 const { scrapeByBarcode, RETAILER } = require('./scrapers/woolworths');
 
 // Maximum age of a cached price before it is considered stale (6 hours)
@@ -14,28 +16,44 @@ const CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
 // ── DB helpers ────────────────────────────────────────────────────────────────
 
-function upsertProduct(data) {
-  db.prepare(`
+async function upsertProduct(data) {
+  await sql`
     INSERT INTO products (barcode, name, brand, pack_size, image_url, updated_at)
-    VALUES (@barcode, @name, @brand, @pack_size, @image_url, datetime('now'))
-    ON CONFLICT(barcode) DO UPDATE SET
-      name      = excluded.name,
-      brand     = excluded.brand,
-      pack_size = excluded.pack_size,
-      image_url = excluded.image_url,
-      updated_at = datetime('now')
-  `).run(data);
+    VALUES (
+      ${data.barcode},
+      ${data.name},
+      ${data.brand   ?? null},
+      ${data.pack_size ?? null},
+      ${data.image_url ?? null},
+      NOW()
+    )
+    ON CONFLICT (barcode) DO UPDATE SET
+      name       = EXCLUDED.name,
+      brand      = EXCLUDED.brand,
+      pack_size  = EXCLUDED.pack_size,
+      image_url  = EXCLUDED.image_url,
+      updated_at = NOW()
+  `;
 }
 
-function insertPrice(data) {
-  db.prepare(`
-    INSERT INTO retailer_prices (retailer, product_id, price, price_str, scraped_at, url, promo_flag)
-    VALUES (@retailer, @product_id, @price, @price_str, @scraped_at, @url, @promo_flag)
-  `).run(data);
+async function insertPrice(data) {
+  await sql`
+    INSERT INTO retailer_prices
+      (retailer, product_id, price, price_str, scraped_at, url, promo_flag)
+    VALUES (
+      ${data.retailer},
+      ${data.product_id},
+      ${data.price},
+      ${data.price_str   ?? null},
+      ${data.scraped_at},
+      ${data.url         ?? null},
+      ${data.promo_flag  ?? false}
+    )
+  `;
 }
 
-function getLatestPrice(barcode, retailer) {
-  return db.prepare(`
+async function getLatestPrice(barcode, retailer) {
+  const rows = await sql`
     SELECT
       p.barcode,
       p.name,
@@ -50,10 +68,12 @@ function getLatestPrice(barcode, retailer) {
       rp.promo_flag
     FROM retailer_prices rp
     JOIN products p ON p.barcode = rp.product_id
-    WHERE rp.product_id = ? AND rp.retailer = ?
+    WHERE rp.product_id = ${barcode}
+      AND rp.retailer   = ${retailer}
     ORDER BY rp.scraped_at DESC
     LIMIT 1
-  `).get(barcode, retailer);
+  `;
+  return rows[0] ?? null;
 }
 
 // ── Core logic ────────────────────────────────────────────────────────────────
@@ -61,25 +81,25 @@ function getLatestPrice(barcode, retailer) {
 /**
  * Persist a successful scrape result to the DB.
  */
-function persistScrapeResult(result) {
+async function persistScrapeResult(result) {
   if (!result.price) return; // don't persist failed scrapes
 
-  upsertProduct({
-    barcode: result.barcode,
-    name: result.name || result.barcode,
-    brand: result.brand || null,
+  await upsertProduct({
+    barcode:   result.barcode,
+    name:      result.name || result.barcode,
+    brand:     result.brand     || null,
     pack_size: result.pack_size || null,
     image_url: result.image_url || null,
   });
 
-  insertPrice({
-    retailer: result.retailer,
+  await insertPrice({
+    retailer:   result.retailer,
     product_id: result.barcode,
-    price: result.price,
-    price_str: result.price_str,
+    price:      result.price,
+    price_str:  result.price_str,
     scraped_at: result.scraped_at,
-    url: result.url,
-    promo_flag: result.promo_flag ? 1 : 0,
+    url:        result.url,
+    promo_flag: result.promo_flag ? true : false,
   });
 }
 
@@ -90,7 +110,7 @@ async function scrapeAndPersist(barcode) {
   console.log(`[priceService] Scraping ${RETAILER} for barcode ${barcode}...`);
   const result = await scrapeByBarcode(barcode);
   if (result.price) {
-    persistScrapeResult(result);
+    await persistScrapeResult(result);
     console.log(`[priceService] Persisted price R ${result.price} for ${barcode}`);
   } else {
     console.warn(`[priceService] Scrape failed for ${barcode}: ${result.error}`);
@@ -106,7 +126,7 @@ async function scrapeAndPersist(barcode) {
  *   3. If stale or missing, scrape live and persist.
  */
 async function getPrice(barcode) {
-  const cached = getLatestPrice(barcode, RETAILER);
+  const cached = await getLatestPrice(barcode, RETAILER);
 
   if (cached) {
     const ageMs = Date.now() - new Date(cached.scraped_at).getTime();
@@ -129,16 +149,16 @@ async function getPrice(barcode) {
   }
 
   return {
-    barcode: result.barcode,
-    name: result.name,
-    brand: result.brand,
-    pack_size: result.pack_size,
-    image_url: result.image_url,
-    retailer: result.retailer,
-    price: result.price,
-    price_str: result.price_str,
+    barcode:    result.barcode,
+    name:       result.name,
+    brand:      result.brand,
+    pack_size:  result.pack_size,
+    image_url:  result.image_url,
+    retailer:   result.retailer,
+    price:      result.price,
+    price_str:  result.price_str,
     scraped_at: result.scraped_at,
-    url: result.url,
+    url:        result.url,
     promo_flag: result.promo_flag,
     from_cache: false,
   };
@@ -155,11 +175,13 @@ async function forceRefresh(barcode) {
 /**
  * Get all barcodes that have been scraped at least once (for scheduled jobs).
  */
-function getAllTrackedBarcodes() {
-  return db
-    .prepare(`SELECT DISTINCT product_id FROM retailer_prices WHERE retailer = ?`)
-    .all(RETAILER)
-    .map((r) => r.product_id);
+async function getAllTrackedBarcodes() {
+  const rows = await sql`
+    SELECT DISTINCT product_id
+    FROM retailer_prices
+    WHERE retailer = ${RETAILER}
+  `;
+  return rows.map((r) => r.product_id);
 }
 
 module.exports = { getPrice, forceRefresh, getAllTrackedBarcodes };

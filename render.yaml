@@ -19,7 +19,5 @@ services:
         value: 10000
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: /opt/render/project/.cache/playwright
-    disk:
-      name: pricecheck-data
-      mountPath: /data
-      sizeGB: 1
+      - key: DATABASE_URL
+        sync: false   # value is set manually in the Render dashboard — never committed

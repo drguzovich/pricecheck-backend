@@ -1,88 +1,65 @@
 'use strict';
 
-const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
-
 /**
- * Resolve the SQLite database path.
+ * Database layer — Neon (serverless Postgres) via postgres.js
  *
- * Priority:
- *   1. DB_PATH env var (explicit override)
- *   2. /data/pricecheck.db  — only if /data is writable (Render persistent disk)
- *   3. <project-root>/data/pricecheck.db  — works on Render free tier (ephemeral)
- *   4. <os.tmpdir()>/pricecheck.db        — last-resort fallback
+ * Connection is driven entirely by the DATABASE_URL environment variable,
+ * which must be set in the Render service's environment (never committed).
  *
- * Note: Render free-tier instances do NOT support persistent disks, so /data
- * will not exist / will not be writable.  We probe before using it so the
- * server does not crash on startup with EACCES.
+ * Schema is created idempotently on startup so the service self-migrates on
+ * first boot against a fresh database.
  */
-function resolveDbPath() {
-  if (process.env.DB_PATH) return process.env.DB_PATH;
 
-  // Probe /data
-  const persistentPath = '/data/pricecheck.db';
-  try {
-    fs.mkdirSync('/data', { recursive: true });
-    // Quick write-test
-    const testFile = '/data/.write_test';
-    fs.writeFileSync(testFile, '1');
-    fs.unlinkSync(testFile);
-    return persistentPath; // /data is writable — use it
-  } catch (_) {
-    // /data not available or not writable — fall through
-  }
+const postgres = require('postgres');
 
-  // Use project-local data dir (ephemeral on Render free tier, fine for MVP)
-  const localPath = path.join(__dirname, '..', 'data', 'pricecheck.db');
-  try {
-    fs.mkdirSync(path.dirname(localPath), { recursive: true });
-    return localPath;
-  } catch (_) {
-    // Last resort: OS temp dir
-    return path.join(os.tmpdir(), 'pricecheck.db');
-  }
+if (!process.env.DATABASE_URL) {
+  throw new Error('[db] DATABASE_URL environment variable is not set. ' +
+    'Add it to your Render service environment variables.');
 }
 
-const DB_PATH = resolveDbPath();
-console.log(`[db] SQLite path: ${DB_PATH}`);
+const sql = postgres(process.env.DATABASE_URL, {
+  ssl: 'require',
+  max: 5,                // small pool — Neon free tier has connection limits
+  idle_timeout: 20,      // release idle connections quickly (Neon auto-suspends)
+  connect_timeout: 10,
+});
 
-// Ensure data directory exists (no-op if already created above)
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+/**
+ * Create tables idempotently.  Called once at startup; awaited before the
+ * HTTP server starts accepting requests.
+ */
+async function initSchema() {
+  await sql`
+    CREATE TABLE IF NOT EXISTS products (
+      barcode    TEXT PRIMARY KEY,
+      name       TEXT NOT NULL,
+      brand      TEXT,
+      pack_size  TEXT,
+      image_url  TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
 
-const db = new Database(DB_PATH);
+  await sql`
+    CREATE TABLE IF NOT EXISTS retailer_prices (
+      id         BIGSERIAL PRIMARY KEY,
+      retailer   TEXT        NOT NULL,
+      product_id TEXT        NOT NULL REFERENCES products(barcode),
+      price      NUMERIC     NOT NULL,
+      price_str  TEXT,
+      scraped_at TIMESTAMPTZ NOT NULL,
+      url        TEXT,
+      promo_flag BOOLEAN     NOT NULL DEFAULT FALSE
+    )
+  `;
 
-// Enable WAL mode for better concurrent read performance
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_retailer_prices_lookup
+      ON retailer_prices (retailer, product_id, scraped_at DESC)
+  `;
 
-// Create tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS products (
-    barcode    TEXT PRIMARY KEY,          -- EAN-13 barcode
-    name       TEXT NOT NULL,
-    brand      TEXT,
-    pack_size  TEXT,
-    image_url  TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-  );
+  console.log('[db] Schema ready (Neon Postgres)');
+}
 
-  CREATE TABLE IF NOT EXISTS retailer_prices (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    retailer   TEXT NOT NULL,             -- e.g. 'woolworths'
-    product_id TEXT NOT NULL,             -- FK -> products.barcode
-    price      REAL NOT NULL,             -- numeric price in ZAR
-    price_str  TEXT,                      -- raw string e.g. "R 24.95"
-    scraped_at TEXT NOT NULL,             -- ISO-8601 UTC
-    url        TEXT,
-    promo_flag INTEGER DEFAULT 0,         -- 1 = on promotion
-    FOREIGN KEY (product_id) REFERENCES products(barcode)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_retailer_prices_lookup
-    ON retailer_prices (retailer, product_id, scraped_at DESC);
-`);
-
-module.exports = db;
+module.exports = { sql, initSchema };
