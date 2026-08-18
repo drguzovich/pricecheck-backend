@@ -164,7 +164,8 @@ async function scrapeByBarcode(barcode, { timeoutMs = 12000 } = {}) {
       route.abort()
     );
 
-    // Navigate — wait for domcontentloaded which is enough for JSON-LD
+    // Wait for the initial document structure so the product page's embedded
+    // data and client-rendered price selectors are both available.
     const response = await page.goto(url, {
       waitUntil: 'domcontentloaded',
       timeout: timeoutMs,
@@ -179,7 +180,7 @@ async function scrapeByBarcode(barcode, { timeoutMs = 12000 } = {}) {
       };
     }
 
-    // ── Strategy 1: JSON-LD (fastest — available right after domcontentloaded) ──
+    // ── Strategy 1: JSON-LD (fastest — available after DOM content loads) ──
     let extracted = await extractFromJsonLd(page);
 
     // ── Strategy 2: Wait for DOM price selectors ──────────────────────────────

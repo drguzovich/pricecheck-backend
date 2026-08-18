@@ -135,18 +135,17 @@ async function getRetailerPrice(adapter, barcode, { forceRefresh = false } = {})
   if (cached) {
     const ageMs = Date.now() - new Date(cached.scraped_at).getTime();
     if (ageMs < CACHE_MAX_AGE_MS) return available(cached, { from_cache: true });
+
+    // Never make a customer wait on a known, stale result. Start a bounded
+    // refresh in the background and keep the age visible to the caller.
+    boundedScrape(adapter, barcode).catch((error) => {
+      console.error(`[priceService] Background refresh failed for ${adapter.RETAILER}/${barcode}: ${error.message}`);
+    });
+    return available(cached, { from_cache: true, stale: true });
   }
 
   const fresh = await boundedScrape(adapter, barcode);
   if (fresh.available) return fresh;
-
-  if (cached) {
-    return available(cached, {
-      from_cache: true,
-      stale: true,
-      error: fresh.error,
-    });
-  }
   return fresh;
 }
 
