@@ -5,7 +5,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test:retailers": "node scripts/test-woolworths-adapter.js && node scripts/test-pnp-adapter.js"
+    "test:retailers": "node scripts/test-woolworths-adapter.js && node scripts/test-pnp-adapter.js",
+    "verify:deployment": "node scripts/verify-deployment.js"
   },
   "keywords": [],
   "author": "",
