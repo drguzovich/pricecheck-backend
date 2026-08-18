@@ -58,6 +58,22 @@ async function getKnownProduct(barcode) {
   return rows[0] ?? null;
 }
 
+async function getCachedComparisonRows(barcode) {
+  return sql`
+    SELECT p.barcode, p.name, p.brand, p.pack_size, p.image_url,
+           rp.retailer, rp.price, rp.price_str, rp.scraped_at, rp.url, rp.promo_flag
+    FROM products p
+    LEFT JOIN (
+      SELECT DISTINCT ON (retailer)
+             retailer, product_id, price, price_str, scraped_at, url, promo_flag
+      FROM retailer_prices
+      WHERE product_id = ${barcode}
+      ORDER BY retailer, scraped_at DESC
+    ) rp ON rp.product_id = p.barcode
+    WHERE p.barcode = ${barcode}
+  `;
+}
+
 function unavailable(retailer, barcode, error, extra = {}) {
   return {
     retailer,
@@ -130,18 +146,18 @@ async function boundedScrape(adapter, barcode) {
   }
 }
 
-async function getRetailerPrice(adapter, barcode, { forceRefresh = false } = {}) {
-  const cached = forceRefresh ? null : await getLatestPrice(barcode, adapter.RETAILER);
-  if (cached) {
-    const ageMs = Date.now() - new Date(cached.scraped_at).getTime();
-    if (ageMs < CACHE_MAX_AGE_MS) return available(cached, { from_cache: true });
+async function getRetailerPrice(adapter, barcode, { forceRefresh = false, cached = null } = {}) {
+  const cacheEntry = forceRefresh ? null : cached;
+  if (cacheEntry) {
+    const ageMs = Date.now() - new Date(cacheEntry.scraped_at).getTime();
+    if (ageMs < CACHE_MAX_AGE_MS) return available(cacheEntry, { from_cache: true });
 
     // Never make a customer wait on a known, stale result. Start a bounded
     // refresh in the background and keep the age visible to the caller.
     boundedScrape(adapter, barcode).catch((error) => {
       console.error(`[priceService] Background refresh failed for ${adapter.RETAILER}/${barcode}: ${error.message}`);
     });
-    return available(cached, { from_cache: true, stale: true });
+    return available(cacheEntry, { from_cache: true, stale: true });
   }
 
   const fresh = await boundedScrape(adapter, barcode);
@@ -150,15 +166,22 @@ async function getRetailerPrice(adapter, barcode, { forceRefresh = false } = {})
 }
 
 async function getComparison(barcode, { forceRefresh = false } = {}) {
+  const cachedRows = forceRefresh ? [] : await getCachedComparisonRows(barcode);
+  const cachedByRetailer = new Map(
+    cachedRows.filter((row) => row.retailer).map((row) => [row.retailer, row])
+  );
+  const knownProduct = cachedRows[0] ?? null;
   const results = await Promise.all(
     RETAILERS.map((adapter) =>
-      getRetailerPrice(adapter, barcode, { forceRefresh }).catch((error) =>
+      getRetailerPrice(adapter, barcode, {
+        forceRefresh,
+        cached: cachedByRetailer.get(adapter.RETAILER) ?? null,
+      }).catch((error) =>
         unavailable(adapter.RETAILER, barcode, `${adapter.RETAILER} lookup failed: ${error.message}`)
       )
     )
   );
 
-  const knownProduct = await getKnownProduct(barcode);
   const liveProduct = results.find((result) => result.available && result.name);
   const product = {
     barcode,
