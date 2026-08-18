@@ -52,7 +52,7 @@ The service uses a four-hour freshness window and stores price values as Postgre
 
 | Retailer | Current connection | Operational note |
 |---|---|---|
-| Woolworths | Public product-page lookup through Playwright. | A returned stale cache remains visible and identifies that status to the client. |
+| Woolworths | Public product-document JSON-LD lookup, with Playwright only as a fallback. | A returned stale cache remains visible and identifies that status to the client. |
 | Pick n Pay | Adapter is implemented. An approved provider can be configured with `PNP_PRODUCT_LOOKUP_URL`. | The public-catalogue fallback is disabled by default because barcode validation needs to be proven for the relevant deployment/store context. Enable only with `PNP_PUBLIC_CATALOGUE_ENABLED=true` after validation. |
 | Checkers | Explicit unavailable adapter. | Do not enable an integration until an approved product-data source and terms review are in place. |
 

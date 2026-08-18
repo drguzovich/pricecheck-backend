@@ -44,6 +44,66 @@ function parsePrice(raw) {
   return isNaN(num) ? null : num;
 }
 
+function getJsonLdProduct(data) {
+  const candidates = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.['@graph'])
+      ? data['@graph']
+      : [data];
+  for (const candidate of candidates) {
+    const types = Array.isArray(candidate?.['@type']) ? candidate['@type'] : [candidate?.['@type']];
+    if (!types.includes('Product')) continue;
+    const offer = Array.isArray(candidate.offers) ? candidate.offers[0] : candidate.offers;
+    const price = parsePrice(String(offer?.price ?? ''));
+    if (!price) continue;
+    return {
+      name: candidate.name || null,
+      brand: candidate.brand?.name || null,
+      price,
+      price_str: `R ${price.toFixed(2)}`,
+      image_url: Array.isArray(candidate.image) ? candidate.image[0] : candidate.image || null,
+      product_url: offer?.url || candidate['@id'] || null,
+    };
+  }
+  return null;
+}
+
+/**
+ * Retrieve the public product document directly and extract its embedded
+ * JSON-LD. This avoids waiting for non-essential browser resources when the
+ * server-rendered product data is already present in the document.
+ */
+async function fetchJsonLdProduct(url, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': USER_AGENT,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-ZA,en;q=0.9',
+      },
+      signal: controller.signal,
+    });
+    if (response.status === 404) return { notFound: true, product: null };
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const html = await response.text();
+    const scripts = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+    for (const script of scripts) {
+      try {
+        const product = getJsonLdProduct(JSON.parse(script[1]));
+        if (product) return { notFound: false, product };
+      } catch (_) {
+        // Ignore a malformed structured-data script and keep searching.
+      }
+    }
+    return { notFound: false, product: null };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Try to extract product data from JSON-LD scripts already present in the page HTML.
  * Returns { name, brand, price, price_str, image_url } or null if not found.
@@ -148,6 +208,33 @@ async function scrapeByBarcode(barcode, { timeoutMs = 12000 } = {}) {
 
   let browser;
   try {
+    const documentResult = await fetchJsonLdProduct(url, timeoutMs);
+    if (documentResult.notFound) {
+      return {
+        barcode, name: null, brand: null, pack_size: null, image_url: null,
+        price: null, price_str: null, url, promo_flag: false, scraped_at,
+        retailer: RETAILER,
+        error: 'HTTP 404 — product not found',
+      };
+    }
+    if (documentResult.product) {
+      const pack_size = documentResult.product.name?.match(/(\d+\s*(?:g|kg|ml|l|L))\b/i)?.[1] || null;
+      return {
+        barcode,
+        name: documentResult.product.name,
+        brand: documentResult.product.brand,
+        pack_size,
+        image_url: documentResult.product.image_url,
+        price: documentResult.product.price,
+        price_str: documentResult.product.price_str,
+        url: documentResult.product.product_url || url,
+        promo_flag: false,
+        scraped_at,
+        retailer: RETAILER,
+        error: null,
+      };
+    }
+
     browser = await chromium.launch({ headless: true, args: BROWSER_ARGS });
 
     const context = await browser.newContext({
