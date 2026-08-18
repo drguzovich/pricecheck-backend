@@ -1,187 +1,144 @@
 'use strict';
 
 const express = require('express');
-const cors    = require('cors');
-const helmet  = require('helmet');
-const cron    = require('node-cron');
+const cors = require('cors');
+const helmet = require('helmet');
+const cron = require('node-cron');
 
-const { initSchema }                             = require('./db');
-const { getPrice, forceRefresh, getAllTrackedBarcodes } = require('./priceService');
+const { initSchema } = require('./db');
+const {
+  getComparison,
+  forceRefreshComparison,
+  searchProducts,
+  getAllTrackedBarcodes,
+} = require('./priceService');
 
-const app  = express();
+const app = express();
 const PORT = process.env.PORT || 3001;
 
-// ── Middleware ─────────────────────────────────────────────────────────────────
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
 
-// ── Health check ──────────────────────────────────────────────────────────────
+function validBarcode(barcode) {
+  return /^\d{8,14}$/.test(barcode);
+}
+
+function comparisonResponse(comparison, legacy) {
+  return {
+    ...comparison,
+    // Legacy fields keep the existing Expo client functional while the PWA
+    // reads the canonical `results` array.
+    retailer: legacy?.retailer ?? null,
+    price: legacy?.price ?? null,
+    price_str: legacy?.price_str ?? null,
+    scraped_at: legacy?.scraped_at ?? null,
+    url: legacy?.url ?? null,
+    promo_flag: legacy?.promo_flag ?? false,
+    from_cache: legacy?.from_cache ?? false,
+    stale: legacy?.stale ?? false,
+  };
+}
+
+function woolworthsLegacy(comparison) {
+  const result = comparison.results.find((item) => item.retailer === 'woolworths');
+  if (!result?.available) return null;
+  return {
+    retailer: result.retailer,
+    price: result.price,
+    price_str: result.price_str,
+    scraped_at: result.updated_at,
+    url: result.url,
+    promo_flag: result.promo_flag,
+    from_cache: result.from_cache,
+    stale: result.stale,
+  };
+}
+
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// ── GET /price/:barcode ───────────────────────────────────────────────────────
-/**
- * Returns the latest Woolworths price for a given EAN-13 barcode.
- *
- * Success response:
- * {
- *   product: { barcode, name, brand, pack_size, image_url },
- *   retailer: "woolworths",
- *   price: 24.95,
- *   price_str: "R 24.95",
- *   scraped_at: "2024-01-01T12:00:00.000Z",
- *   url: "https://www.woolworths.co.za/prod/...",
- *   promo_flag: false,
- *   from_cache: true
- * }
- *
- * Not found response (404):
- * { error: "not_found", message: "..." }
- */
 app.get('/price/:barcode', async (req, res) => {
   const { barcode } = req.params;
-
-  // Basic EAN-13 validation (13 digits)
-  if (!/^\d{8,14}$/.test(barcode)) {
-    return res.status(400).json({
-      error:   'invalid_barcode',
-      message: 'Barcode must be 8–14 digits',
-    });
-  }
-
-  try {
-    const data = await getPrice(barcode);
-
-    if (!data) {
-      return res.status(404).json({
-        error:   'not_found',
-        message: `No Woolworths listing found for barcode ${barcode}`,
-      });
-    }
-
-    return res.json({
-      product: {
-        barcode:   data.barcode,
-        name:      data.name,
-        brand:     data.brand,
-        pack_size: data.pack_size,
-        image_url: data.image_url,
-      },
-      retailer:   data.retailer,
-      price:      Number(data.price),   // NUMERIC from Postgres comes as string
-      price_str:  data.price_str,
-      scraped_at: data.scraped_at,
-      url:        data.url,
-      promo_flag: Boolean(data.promo_flag),
-      from_cache: data.from_cache,
-      stale:      data.stale || false,
-    });
-  } catch (err) {
-    console.error(`[server] Error fetching price for ${barcode}:`, err);
-    return res.status(500).json({
-      error:   'scrape_error',
-      message: err.message,
-    });
-  }
-});
-
-// ── POST /price/:barcode/refresh ──────────────────────────────────────────────
-/**
- * Force a fresh scrape for a barcode, bypassing cache.
- */
-app.post('/price/:barcode/refresh', async (req, res) => {
-  const { barcode } = req.params;
-
-  if (!/^\d{8,14}$/.test(barcode)) {
+  if (!validBarcode(barcode)) {
     return res.status(400).json({ error: 'invalid_barcode', message: 'Barcode must be 8–14 digits' });
   }
 
   try {
-    const result = await forceRefresh(barcode);
-
-    if (!result.price) {
+    const comparison = await getComparison(barcode);
+    const legacy = woolworthsLegacy(comparison);
+    const hasAvailableResult = comparison.results.some((result) => result.available);
+    if (!hasAvailableResult) {
       return res.status(404).json({
-        error:   'not_found',
-        message: result.error || `Product not found for barcode ${barcode}`,
+        error: 'not_found',
+        message: `No retailer listing found for barcode ${barcode}`,
+        ...comparisonResponse(comparison, legacy),
       });
     }
-
-    return res.json({
-      product: {
-        barcode:   result.barcode,
-        name:      result.name,
-        brand:     result.brand,
-        pack_size: result.pack_size,
-        image_url: result.image_url,
-      },
-      retailer:   result.retailer,
-      price:      Number(result.price),
-      price_str:  result.price_str,
-      scraped_at: result.scraped_at,
-      url:        result.url,
-      promo_flag: Boolean(result.promo_flag),
-      from_cache: false,
-    });
-  } catch (err) {
-    console.error(`[server] Refresh error for ${barcode}:`, err);
-    return res.status(500).json({ error: 'scrape_error', message: err.message });
+    return res.json(comparisonResponse(comparison, legacy));
+  } catch (error) {
+    console.error(`[server] Comparison error for ${barcode}:`, error);
+    return res.status(503).json({ error: 'comparison_unavailable', message: 'Price comparison is temporarily unavailable' });
   }
 });
 
-// ── POST /admin/refresh-all ───────────────────────────────────────────────────
-/**
- * Manually trigger a refresh of all tracked barcodes.
- * Responds immediately with 202 Accepted; runs in background.
- */
-app.post('/admin/refresh-all', async (req, res) => {
-  const barcodes = await getAllTrackedBarcodes();
-  console.log(`[admin] refresh-all triggered for ${barcodes.length} barcodes`);
+app.post('/price/:barcode/refresh', async (req, res) => {
+  const { barcode } = req.params;
+  if (!validBarcode(barcode)) {
+    return res.status(400).json({ error: 'invalid_barcode', message: 'Barcode must be 8–14 digits' });
+  }
 
-  // Fire and forget
+  try {
+    const comparison = await forceRefreshComparison(barcode);
+    const legacy = woolworthsLegacy(comparison);
+    const hasAvailableResult = comparison.results.some((result) => result.available);
+    if (!hasAvailableResult) {
+      return res.status(404).json({ error: 'not_found', message: `No fresh retailer listing found for barcode ${barcode}`, ...comparisonResponse(comparison, legacy) });
+    }
+    return res.json(comparisonResponse(comparison, legacy));
+  } catch (error) {
+    console.error(`[server] Refresh error for ${barcode}:`, error);
+    return res.status(503).json({ error: 'comparison_unavailable', message: 'Unable to refresh prices right now' });
+  }
+});
+
+app.get('/search', async (req, res) => {
+  const query = String(req.query.q || '').trim();
+  if (query.length < 2) return res.status(400).json({ error: 'invalid_query', message: 'Search query must contain at least 2 characters' });
+  try {
+    return res.json({ query, results: await searchProducts(query) });
+  } catch (error) {
+    console.error('[server] Search error:', error);
+    return res.status(503).json({ error: 'search_unavailable', message: 'Search is temporarily unavailable' });
+  }
+});
+
+app.post('/admin/refresh-all', async (_req, res) => {
+  const barcodes = await getAllTrackedBarcodes();
   (async () => {
     for (const barcode of barcodes) {
-      try {
-        await forceRefresh(barcode);
-        console.log(`[admin] Refreshed ${barcode}`);
-      } catch (e) {
-        console.error(`[admin] Failed to refresh ${barcode}: ${e.message}`);
-      }
+      try { await forceRefreshComparison(barcode); }
+      catch (error) { console.error(`[admin] Refresh failed for ${barcode}: ${error.message}`); }
     }
-    console.log('[admin] refresh-all complete');
   })();
-
-  return res.status(202).json({
-    message:  `Refresh triggered for ${barcodes.length} barcode(s)`,
-    barcodes,
-  });
+  return res.status(202).json({ message: `Refresh triggered for ${barcodes.length} barcode(s)`, barcodes });
 });
 
-// ── Scheduled job: refresh all tracked prices every 6 hours ──────────────────
 cron.schedule('0 */6 * * *', async () => {
   const barcodes = await getAllTrackedBarcodes();
-  console.log(`[cron] Scheduled refresh for ${barcodes.length} barcodes`);
   for (const barcode of barcodes) {
-    try {
-      await forceRefresh(barcode);
-    } catch (e) {
-      console.error(`[cron] Failed to refresh ${barcode}: ${e.message}`);
-    }
+    try { await forceRefreshComparison(barcode); }
+    catch (error) { console.error(`[cron] Refresh failed for ${barcode}: ${error.message}`); }
   }
 });
 
-// ── Start server (await schema init first) ────────────────────────────────────
 (async () => {
   try {
     await initSchema();
-    app.listen(PORT, () => {
-      console.log(`[server] PriceCheck backend running on port ${PORT}`);
-      console.log(`[server] Health: http://localhost:${PORT}/health`);
-      console.log(`[server] Price:  http://localhost:${PORT}/price/:barcode`);
-    });
-  } catch (err) {
-    console.error('[server] Failed to initialise database schema:', err);
+    app.listen(PORT, () => console.log(`[server] PriceCheck backend listening on ${PORT}`));
+  } catch (error) {
+    console.error('[server] Failed to initialise database schema:', error);
     process.exit(1);
   }
 })();

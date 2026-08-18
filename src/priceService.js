@@ -1,187 +1,235 @@
 'use strict';
 
 /**
- * Price service — coordinates scraping and DB persistence.
- * Implements a cache-first strategy: serve the last scraped price
- * and refresh in the background (or on-demand via the refresh endpoint).
- *
- * All DB calls are async (postgres.js tagged-template queries).
+ * Price service: bounded, cache-aware retailer comparison.
+ * All monetary values use decimal rands on the backend. Client applications
+ * convert to cents before their local ranking and display logic.
  */
 
 const { sql } = require('./db');
-const { scrapeByBarcode, RETAILER } = require('./scrapers/woolworths');
+const woolworths = require('./scrapers/woolworths');
+const pickNPay = require('./scrapers/pnp');
+const checkers = require('./scrapers/checkers');
 
-// Maximum age of a cached price before it is considered stale (6 hours)
-const CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-
-// ── DB helpers ────────────────────────────────────────────────────────────────
+const CACHE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
+const RETAILER_TIMEOUT_MS = Number(process.env.RETAILER_TIMEOUT_MS || 12000);
+const RETAILERS = [woolworths, pickNPay, checkers];
 
 async function upsertProduct(data) {
   await sql`
     INSERT INTO products (barcode, name, brand, pack_size, image_url, updated_at)
-    VALUES (
-      ${data.barcode},
-      ${data.name},
-      ${data.brand   ?? null},
-      ${data.pack_size ?? null},
-      ${data.image_url ?? null},
-      NOW()
-    )
+    VALUES (${data.barcode}, ${data.name}, ${data.brand ?? null}, ${data.pack_size ?? null}, ${data.image_url ?? null}, NOW())
     ON CONFLICT (barcode) DO UPDATE SET
-      name       = EXCLUDED.name,
-      brand      = EXCLUDED.brand,
-      pack_size  = EXCLUDED.pack_size,
-      image_url  = EXCLUDED.image_url,
+      name = EXCLUDED.name,
+      brand = EXCLUDED.brand,
+      pack_size = EXCLUDED.pack_size,
+      image_url = EXCLUDED.image_url,
       updated_at = NOW()
   `;
 }
 
 async function insertPrice(data) {
   await sql`
-    INSERT INTO retailer_prices
-      (retailer, product_id, price, price_str, scraped_at, url, promo_flag)
-    VALUES (
-      ${data.retailer},
-      ${data.product_id},
-      ${data.price},
-      ${data.price_str   ?? null},
-      ${data.scraped_at},
-      ${data.url         ?? null},
-      ${data.promo_flag  ?? false}
-    )
+    INSERT INTO retailer_prices (retailer, product_id, price, price_str, scraped_at, url, promo_flag)
+    VALUES (${data.retailer}, ${data.barcode}, ${data.price}, ${data.price_str ?? null}, ${data.scraped_at}, ${data.url ?? null}, ${Boolean(data.promo_flag)})
   `;
 }
 
 async function getLatestPrice(barcode, retailer) {
   const rows = await sql`
-    SELECT
-      p.barcode,
-      p.name,
-      p.brand,
-      p.pack_size,
-      p.image_url,
-      rp.retailer,
-      rp.price,
-      rp.price_str,
-      rp.scraped_at,
-      rp.url,
-      rp.promo_flag
+    SELECT p.barcode, p.name, p.brand, p.pack_size, p.image_url,
+           rp.retailer, rp.price, rp.price_str, rp.scraped_at, rp.url, rp.promo_flag
     FROM retailer_prices rp
     JOIN products p ON p.barcode = rp.product_id
-    WHERE rp.product_id = ${barcode}
-      AND rp.retailer   = ${retailer}
+    WHERE rp.product_id = ${barcode} AND rp.retailer = ${retailer}
     ORDER BY rp.scraped_at DESC
     LIMIT 1
   `;
   return rows[0] ?? null;
 }
 
-// ── Core logic ────────────────────────────────────────────────────────────────
-
-/**
- * Persist a successful scrape result to the DB.
- */
-async function persistScrapeResult(result) {
-  if (!result.price) return; // don't persist failed scrapes
-
-  await upsertProduct({
-    barcode:   result.barcode,
-    name:      result.name || result.barcode,
-    brand:     result.brand     || null,
-    pack_size: result.pack_size || null,
-    image_url: result.image_url || null,
-  });
-
-  await insertPrice({
-    retailer:   result.retailer,
-    product_id: result.barcode,
-    price:      result.price,
-    price_str:  result.price_str,
-    scraped_at: result.scraped_at,
-    url:        result.url,
-    promo_flag: result.promo_flag ? true : false,
-  });
+async function getKnownProduct(barcode) {
+  const rows = await sql`
+    SELECT barcode, name, brand, pack_size, image_url
+    FROM products
+    WHERE barcode = ${barcode}
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
 }
 
-/**
- * Scrape and persist; return the result.
- */
-async function scrapeAndPersist(barcode) {
-  console.log(`[priceService] Scraping ${RETAILER} for barcode ${barcode}...`);
-  const result = await scrapeByBarcode(barcode);
-  if (result.price) {
-    await persistScrapeResult(result);
-    console.log(`[priceService] Persisted price R ${result.price} for ${barcode}`);
-  } else {
-    console.warn(`[priceService] Scrape failed for ${barcode}: ${result.error}`);
-  }
-  return result;
-}
-
-/**
- * Get the price for a barcode from Woolworths.
- * Strategy:
- *   1. Check DB for a cached price.
- *   2. If fresh (< CACHE_MAX_AGE_MS), return it immediately.
- *   3. If stale or missing, scrape live and persist.
- */
-async function getPrice(barcode) {
-  const cached = await getLatestPrice(barcode, RETAILER);
-
-  if (cached) {
-    const ageMs = Date.now() - new Date(cached.scraped_at).getTime();
-    if (ageMs < CACHE_MAX_AGE_MS) {
-      console.log(`[priceService] Cache hit for ${barcode} (age ${Math.round(ageMs / 60000)}m)`);
-      return { ...cached, from_cache: true };
-    }
-    // Stale — trigger background refresh but return stale data immediately
-    console.log(`[priceService] Cache stale for ${barcode}, refreshing in background`);
-    scrapeAndPersist(barcode).catch((e) =>
-      console.error(`[priceService] Background refresh failed: ${e.message}`)
-    );
-    return { ...cached, from_cache: true, stale: true };
-  }
-
-  // No cache — must scrape synchronously
-  const result = await scrapeAndPersist(barcode);
-  if (!result.price) {
-    return null; // product not found / scrape failed
-  }
-
+function unavailable(retailer, barcode, error, extra = {}) {
   return {
-    barcode:    result.barcode,
-    name:       result.name,
-    brand:      result.brand,
-    pack_size:  result.pack_size,
-    image_url:  result.image_url,
-    retailer:   result.retailer,
-    price:      result.price,
-    price_str:  result.price_str,
-    scraped_at: result.scraped_at,
-    url:        result.url,
-    promo_flag: result.promo_flag,
-    from_cache: false,
+    retailer,
+    barcode,
+    available: false,
+    price: null,
+    price_str: null,
+    updated_at: extra.updated_at ?? null,
+    url: extra.url ?? null,
+    promo_flag: false,
+    from_cache: Boolean(extra.from_cache),
+    stale: Boolean(extra.stale),
+    error,
   };
 }
 
-/**
- * Force a fresh scrape regardless of cache age.
- */
+function available(data, extra = {}) {
+  return {
+    retailer: data.retailer,
+    barcode: data.barcode,
+    available: true,
+    name: data.name ?? null,
+    brand: data.brand ?? null,
+    pack_size: data.pack_size ?? null,
+    image_url: data.image_url ?? null,
+    price: Number(data.price),
+    price_str: data.price_str ?? `R ${Number(data.price).toFixed(2)}`,
+    updated_at: data.scraped_at ?? data.updated_at,
+    url: data.url ?? null,
+    promo_flag: Boolean(data.promo_flag),
+    from_cache: Boolean(extra.from_cache),
+    stale: Boolean(extra.stale),
+    error: extra.error ?? null,
+  };
+}
+
+async function persistResult(result) {
+  if (!result.price) return;
+  await upsertProduct({
+    barcode: result.barcode,
+    name: result.name || result.barcode,
+    brand: result.brand,
+    pack_size: result.pack_size,
+    image_url: result.image_url,
+  });
+  await insertPrice(result);
+}
+
+async function boundedScrape(adapter, barcode) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(
+      () => resolve(unavailable(adapter.RETAILER, barcode, `${adapter.RETAILER} request timed out`)),
+      RETAILER_TIMEOUT_MS
+    );
+  });
+
+  try {
+    const result = await Promise.race([
+      adapter.scrapeByBarcode(barcode, { timeoutMs: RETAILER_TIMEOUT_MS }),
+      timeout,
+    ]);
+    if (!result.price) return unavailable(adapter.RETAILER, barcode, result.error || 'No price found');
+    await persistResult(result);
+    return available(result);
+  } catch (error) {
+    return unavailable(adapter.RETAILER, barcode, `${adapter.RETAILER} request failed: ${error.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function getRetailerPrice(adapter, barcode, { forceRefresh = false } = {}) {
+  const cached = forceRefresh ? null : await getLatestPrice(barcode, adapter.RETAILER);
+  if (cached) {
+    const ageMs = Date.now() - new Date(cached.scraped_at).getTime();
+    if (ageMs < CACHE_MAX_AGE_MS) return available(cached, { from_cache: true });
+  }
+
+  const fresh = await boundedScrape(adapter, barcode);
+  if (fresh.available) return fresh;
+
+  if (cached) {
+    return available(cached, {
+      from_cache: true,
+      stale: true,
+      error: fresh.error,
+    });
+  }
+  return fresh;
+}
+
+async function getComparison(barcode, { forceRefresh = false } = {}) {
+  const results = await Promise.all(
+    RETAILERS.map((adapter) =>
+      getRetailerPrice(adapter, barcode, { forceRefresh }).catch((error) =>
+        unavailable(adapter.RETAILER, barcode, `${adapter.RETAILER} lookup failed: ${error.message}`)
+      )
+    )
+  );
+
+  const knownProduct = await getKnownProduct(barcode);
+  const liveProduct = results.find((result) => result.available && result.name);
+  const product = {
+    barcode,
+    name: liveProduct?.name ?? knownProduct?.name ?? null,
+    brand: liveProduct?.brand ?? knownProduct?.brand ?? null,
+    pack_size: liveProduct?.pack_size ?? knownProduct?.pack_size ?? null,
+    image_url: liveProduct?.image_url ?? knownProduct?.image_url ?? null,
+  };
+
+  return { barcode, product, results };
+}
+
+/** Legacy Expo compatibility: return the top-level Woolworths shape when available. */
+async function getPrice(barcode) {
+  const comparison = await getComparison(barcode);
+  const woolworthsResult = comparison.results.find((result) => result.retailer === woolworths.RETAILER);
+  if (!woolworthsResult?.available) return null;
+  return {
+    ...comparison.product,
+    retailer: woolworthsResult.retailer,
+    price: woolworthsResult.price,
+    price_str: woolworthsResult.price_str,
+    scraped_at: woolworthsResult.updated_at,
+    url: woolworthsResult.url,
+    promo_flag: woolworthsResult.promo_flag,
+    from_cache: woolworthsResult.from_cache,
+    stale: woolworthsResult.stale,
+  };
+}
+
 async function forceRefresh(barcode) {
-  const result = await scrapeAndPersist(barcode);
-  return result;
+  const comparison = await getComparison(barcode, { forceRefresh: true });
+  const woolworthsResult = comparison.results.find((result) => result.retailer === woolworths.RETAILER);
+  if (!woolworthsResult?.available) return { price: null, error: woolworthsResult?.error || 'Woolworths unavailable' };
+  return {
+    ...comparison.product,
+    retailer: woolworthsResult.retailer,
+    price: woolworthsResult.price,
+    price_str: woolworthsResult.price_str,
+    scraped_at: woolworthsResult.updated_at,
+    url: woolworthsResult.url,
+    promo_flag: woolworthsResult.promo_flag,
+  };
 }
 
-/**
- * Get all barcodes that have been scraped at least once (for scheduled jobs).
- */
-async function getAllTrackedBarcodes() {
+async function forceRefreshComparison(barcode) {
+  return getComparison(barcode, { forceRefresh: true });
+}
+
+async function searchProducts(query) {
   const rows = await sql`
-    SELECT DISTINCT product_id
-    FROM retailer_prices
-    WHERE retailer = ${RETAILER}
+    SELECT barcode, name, brand, pack_size, image_url
+    FROM products
+    WHERE name ILIKE ${`%${query}%`} OR brand ILIKE ${`%${query}%`} OR barcode = ${query}
+    ORDER BY updated_at DESC
+    LIMIT 20
   `;
-  return rows.map((r) => r.product_id);
+  return rows;
 }
 
-module.exports = { getPrice, forceRefresh, getAllTrackedBarcodes };
+async function getAllTrackedBarcodes() {
+  const rows = await sql`SELECT DISTINCT product_id FROM retailer_prices`;
+  return rows.map((row) => row.product_id);
+}
+
+module.exports = {
+  getPrice,
+  getComparison,
+  forceRefresh,
+  forceRefreshComparison,
+  searchProducts,
+  getAllTrackedBarcodes,
+};

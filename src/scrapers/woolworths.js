@@ -142,7 +142,7 @@ async function extractFromPageState(page) {
 /**
  * Scrape a single product from Woolworths by barcode.
  */
-async function scrapeByBarcode(barcode) {
+async function scrapeByBarcode(barcode, { timeoutMs = 12000 } = {}) {
   const url = `${BASE_URL}/prod/_/A-${barcode}`;
   const scraped_at = new Date().toISOString();
 
@@ -167,7 +167,7 @@ async function scrapeByBarcode(barcode) {
     // Navigate — wait for domcontentloaded which is enough for JSON-LD
     const response = await page.goto(url, {
       waitUntil: 'domcontentloaded',
-      timeout: 45000,
+      timeout: timeoutMs,
     });
 
     if (!response || response.status() === 404) {
@@ -185,7 +185,7 @@ async function scrapeByBarcode(barcode) {
     // ── Strategy 2: Wait for DOM price selectors ──────────────────────────────
     if (!extracted || !extracted.price) {
       console.log(`[scraper] JSON-LD miss for ${barcode}, waiting for DOM selectors…`);
-      const domResult = await extractFromDom(page, 30000);
+      const domResult = await extractFromDom(page, Math.max(1000, Math.floor(timeoutMs / 2)));
       if (domResult?.price) {
         extracted = { ...extracted, ...domResult };
       }
