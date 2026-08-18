@@ -10,11 +10,14 @@
  * product requirement is introduced.
  *
  * When PNP_PRODUCT_LOOKUP_URL is set, an operator-approved product provider is
- * preferred. The template must contain `{barcode}`.
+ * preferred. The template must contain `{barcode}`. A Parse provider key can
+ * alternatively enable the documented Pick n Pay search endpoint with a known
+ * product name as its query.
  */
 
 const RETAILER = 'pick_n_pay';
 const BASE_URL = 'https://www.pnp.co.za';
+const PARSE_SEARCH_URL = 'https://api.parse.bot/scraper/b87810bc-903f-41b8-b38d-c5c911cab324/search_products';
 const BROWSER_ARGS = [
   '--no-sandbox',
   '--disable-setuid-sandbox',
@@ -116,6 +119,57 @@ async function lookupApprovedEndpoint(barcode, template, timeoutMs) {
   }
 }
 
+async function lookupParseProvider(barcode, productName, timeoutMs) {
+  const apiKey = process.env.PARSE_API_KEY;
+  if (!apiKey) return unavailable(barcode, 'Pick n Pay provider key is not configured');
+
+  const query = productName || barcode;
+  const url = new URL(PARSE_SEARCH_URL);
+  url.searchParams.set('page', '0');
+  url.searchParams.set('sort', 'relevance');
+  url.searchParams.set('query', query);
+  url.searchParams.set('page_size', '8');
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: 'application/json', 'X-API-Key': apiKey },
+      signal: controller.signal,
+    });
+    if (response.status === 404) return unavailable(barcode, 'Product not found at Pick n Pay');
+    if (!response.ok) return unavailable(barcode, `Pick n Pay provider returned HTTP ${response.status}`);
+
+    const payload = await response.json();
+    const candidates = payload?.data?.products ?? payload?.products ?? [];
+    const normalizedQuery = query.toLowerCase();
+    const candidate = candidates.find((item) => item?.name?.toLowerCase().includes(normalizedQuery)) ?? candidates[0] ?? null;
+    const price = extractPrice(candidate);
+    if (!candidate || !price) return unavailable(barcode, 'Pick n Pay provider did not return a usable price');
+
+    const name = candidate.name ?? null;
+    return {
+      barcode,
+      name,
+      brand: candidate.brand?.name ?? candidate.brand ?? null,
+      pack_size: candidate.packSize ?? candidate.size ?? name?.match(/(\d+\s*(?:g|kg|ml|l|L))\b/i)?.[1] ?? null,
+      image_url: candidate.images?.[0]?.url ?? candidate.image ?? candidate.imageUrl ?? null,
+      price,
+      price_str: candidate.price?.formattedValue ?? `R ${price.toFixed(2)}`,
+      url: candidate.url ?? candidate.productUrl ?? null,
+      promo_flag: Boolean(candidate.potentialPromotions?.length || candidate.promo || candidate.onPromotion || candidate.special),
+      scraped_at: new Date().toISOString(),
+      retailer: RETAILER,
+      error: null,
+    };
+  } catch (error) {
+    const message = error.name === 'AbortError' ? 'Pick n Pay provider request timed out' : `Pick n Pay provider request failed: ${error.message}`;
+    return unavailable(barcode, message);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function lookupPublicCatalogue(barcode, timeoutMs) {
   const url = BASE_URL;
   const scraped_at = new Date().toISOString();
@@ -189,9 +243,10 @@ async function lookupPublicCatalogue(barcode, timeoutMs) {
   }
 }
 
-async function scrapeByBarcode(barcode, { timeoutMs = 12000 } = {}) {
+async function scrapeByBarcode(barcode, { timeoutMs = 12000, productName = null } = {}) {
   const template = process.env.PNP_PRODUCT_LOOKUP_URL;
   if (template) return lookupApprovedEndpoint(barcode, template, timeoutMs);
+  if (process.env.PARSE_API_KEY) return lookupParseProvider(barcode, productName, timeoutMs);
   if (process.env.PNP_PUBLIC_CATALOGUE_ENABLED === 'true') {
     return lookupPublicCatalogue(barcode, timeoutMs);
   }

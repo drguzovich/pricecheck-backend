@@ -53,7 +53,7 @@ The service uses a four-hour freshness window and stores price values as Postgre
 | Retailer | Current connection | Operational note |
 |---|---|---|
 | Woolworths | Public product-document JSON-LD lookup, with Playwright only as a fallback. | A returned stale cache remains visible and identifies that status to the client. |
-| Pick n Pay | Adapter is implemented. An approved provider can be configured with `PNP_PRODUCT_LOOKUP_URL`. | The public-catalogue fallback is disabled by default because barcode validation needs to be proven for the relevant deployment/store context. Enable only with `PNP_PUBLIC_CATALOGUE_ENABLED=true` after validation. |
+| Pick n Pay | Adapter is implemented. An approved provider can be configured with `PNP_PRODUCT_LOOKUP_URL` or the documented Parse provider through `PARSE_API_KEY`. | The public-catalogue fallback is disabled by default because barcode validation needs to be proven for the relevant deployment/store context. Enable only with `PNP_PUBLIC_CATALOGUE_ENABLED=true` after validation. |
 | Checkers | Explicit unavailable adapter. | Do not enable an integration until an approved product-data source and terms review are in place. |
 
 Retailer grocery pricing and availability can vary by delivery area or store. The current API does not accept a store or location parameter, so its catalogue results are not location-specific.
@@ -72,6 +72,7 @@ retailer_prices (id, retailer, product_id FK, price, price_str, scraped_at, url,
 | `DATABASE_URL` | Yes | Neon Postgres connection string. |
 | `RETAILER_TIMEOUT_MS` | No | Bounded timeout per retailer lookup; defaults to `12000`. |
 | `PNP_PRODUCT_LOOKUP_URL` | No | Approved Pick n Pay product data URL containing `{barcode}`. |
+| `PARSE_API_KEY` | No | API key for Parse's managed Pick n Pay product-search provider. The service queries the canonical known product name and retains the barcode as PriceCheck's product identity. |
 | `PNP_PUBLIC_CATALOGUE_ENABLED` | No | Enables the experimental public-page lookup only after product/barcode validation. |
 | `PLAYWRIGHT_BROWSERS_PATH` | Render configuration | Path used by the Render build cache for Chromium. |
 

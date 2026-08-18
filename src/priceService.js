@@ -122,7 +122,7 @@ async function persistResult(result) {
   await insertPrice(result);
 }
 
-async function boundedScrape(adapter, barcode) {
+async function boundedScrape(adapter, barcode, product = null) {
   let timer;
   const timeout = new Promise((resolve) => {
     timer = setTimeout(
@@ -133,7 +133,10 @@ async function boundedScrape(adapter, barcode) {
 
   try {
     const result = await Promise.race([
-      adapter.scrapeByBarcode(barcode, { timeoutMs: RETAILER_TIMEOUT_MS }),
+      adapter.scrapeByBarcode(barcode, {
+        timeoutMs: RETAILER_TIMEOUT_MS,
+        productName: product?.name ?? null,
+      }),
       timeout,
     ]);
     if (!result.price) return unavailable(adapter.RETAILER, barcode, result.error || 'No price found');
@@ -146,7 +149,7 @@ async function boundedScrape(adapter, barcode) {
   }
 }
 
-async function getRetailerPrice(adapter, barcode, { forceRefresh = false, cached = null } = {}) {
+async function getRetailerPrice(adapter, barcode, { forceRefresh = false, cached = null, product = null } = {}) {
   const cacheEntry = forceRefresh ? null : cached;
   if (cacheEntry) {
     const ageMs = Date.now() - new Date(cacheEntry.scraped_at).getTime();
@@ -154,13 +157,13 @@ async function getRetailerPrice(adapter, barcode, { forceRefresh = false, cached
 
     // Never make a customer wait on a known, stale result. Start a bounded
     // refresh in the background and keep the age visible to the caller.
-    boundedScrape(adapter, barcode).catch((error) => {
+    boundedScrape(adapter, barcode, product).catch((error) => {
       console.error(`[priceService] Background refresh failed for ${adapter.RETAILER}/${barcode}: ${error.message}`);
     });
     return available(cacheEntry, { from_cache: true, stale: true });
   }
 
-  const fresh = await boundedScrape(adapter, barcode);
+  const fresh = await boundedScrape(adapter, barcode, product);
   if (fresh.available) return fresh;
   return fresh;
 }
@@ -176,6 +179,7 @@ async function getComparison(barcode, { forceRefresh = false } = {}) {
       getRetailerPrice(adapter, barcode, {
         forceRefresh,
         cached: cachedByRetailer.get(adapter.RETAILER) ?? null,
+        product: knownProduct,
       }).catch((error) =>
         unavailable(adapter.RETAILER, barcode, `${adapter.RETAILER} lookup failed: ${error.message}`)
       )
