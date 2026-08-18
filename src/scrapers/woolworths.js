@@ -235,6 +235,16 @@ async function scrapeByBarcode(barcode, { timeoutMs = 12000 } = {}) {
       };
     }
 
+    // A successfully retrieved product document without a Product JSON-LD
+    // record is not a valid catalogue result. Returning here keeps unknown
+    // barcode requests bounded instead of launching a browser fallback.
+    return {
+      barcode, name: null, brand: null, pack_size: null, image_url: null,
+      price: null, price_str: null, url, promo_flag: false, scraped_at,
+      retailer: RETAILER,
+      error: 'Product not found in Woolworths structured data',
+    };
+
     browser = await chromium.launch({ headless: true, args: BROWSER_ARGS });
 
     const context = await browser.newContext({
