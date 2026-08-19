@@ -12,7 +12,10 @@ const pickNPay = require('./scrapers/pnp');
 const checkers = require('./scrapers/checkers');
 
 const CACHE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
-const RETAILER_TIMEOUT_MS = Number(process.env.RETAILER_TIMEOUT_MS || 12000);
+// Managed retailer providers can take longer than direct product documents on
+// a cold request. Keep a finite service-wide budget while allowing those
+// providers enough time to return a verified exact match.
+const RETAILER_TIMEOUT_MS = Number(process.env.RETAILER_TIMEOUT_MS || 20000);
 const RETAILERS = [woolworths, pickNPay, checkers];
 
 async function upsertProduct(data) {

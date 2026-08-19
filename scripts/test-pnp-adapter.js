@@ -4,7 +4,8 @@ const { scrapeByBarcode } = require('../src/scrapers/pnp');
 
 (async () => {
   const barcode = process.argv[2] || '6001069206154';
-  const result = await scrapeByBarcode(barcode, { timeoutMs: 12000 });
+  const productName = process.argv[3] || null;
+  const result = await scrapeByBarcode(barcode, { timeoutMs: 20000, productName });
   const required = ['barcode', 'retailer', 'price', 'price_str', 'scraped_at', 'error'];
   const missing = required.filter((key) => !(key in result));
 

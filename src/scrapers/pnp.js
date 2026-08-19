@@ -66,9 +66,16 @@ function findCandidate(payload) {
 }
 
 function extractPrice(candidate) {
-  const raw = candidate?.price ?? candidate?.sellingPrice ?? candidate?.price?.value;
+  const raw = candidate?.price?.value ?? candidate?.sellingPrice ?? candidate?.price;
   const numeric = typeof raw === 'string' ? Number(raw.replace(/[^\d.]/g, '')) : Number(raw);
   return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function hasExactBarcode(candidate, barcode) {
+  const directIdentifiers = [candidate?.barcode, candidate?.ean, candidate?.gtin, candidate?.upc];
+  if (directIdentifiers.some((identifier) => String(identifier || '') === barcode)) return true;
+  const imageUrls = (candidate?.images || []).map((image) => image?.url || image).filter(Boolean);
+  return imageUrls.some((url) => String(url).includes(barcode));
 }
 
 function parsePrice(raw) {
@@ -143,9 +150,17 @@ async function lookupParseProvider(barcode, productName, timeoutMs) {
     const payload = await response.json();
     const candidates = payload?.data?.products ?? payload?.products ?? [];
     const normalizedQuery = query.toLowerCase();
-    const candidate = candidates.find((item) => item?.name?.toLowerCase().includes(normalizedQuery)) ?? candidates[0] ?? null;
+    const specificTerms = normalizedQuery
+      .replace(/\b\d+\s*(?:g|kg|ml|l)\b/g, ' ')
+      .split(/[^a-z]+/)
+      .filter((term) => term.length >= 3 && !['rusk', 'rusks', 'buttermilk'].includes(term));
+    const candidate = candidates.find((item) => {
+      const name = item?.name?.toLowerCase() || '';
+      const productNameMatches = name.includes(normalizedQuery) || (specificTerms.length > 0 && specificTerms.every((term) => name.includes(term)));
+      return productNameMatches && hasExactBarcode(item, barcode);
+    }) ?? null;
     const price = extractPrice(candidate);
-    if (!candidate || !price) return unavailable(barcode, 'Pick n Pay provider did not return a usable price');
+    if (!candidate || !price) return unavailable(barcode, 'Pick n Pay provider did not return an exact barcode match with a usable price');
 
     const name = candidate.name ?? null;
     return {
