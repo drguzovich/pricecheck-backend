@@ -10,6 +10,7 @@ const { sql } = require('./db');
 const woolworths = require('./scrapers/woolworths');
 const pickNPay = require('./scrapers/pnp');
 const checkers = require('./scrapers/checkers');
+const { getProductMetadata } = require('./productMetadata');
 
 const CACHE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 // Managed retailer providers can take longer than direct product documents on
@@ -177,12 +178,14 @@ async function getComparison(barcode, { forceRefresh = false } = {}) {
     cachedRows.filter((row) => row.retailer).map((row) => [row.retailer, row])
   );
   const knownProduct = cachedRows[0] ?? null;
+  const metadataProduct = knownProduct ? null : await getProductMetadata(barcode);
+  const productHint = knownProduct ?? metadataProduct;
   const results = await Promise.all(
     RETAILERS.map((adapter) =>
       getRetailerPrice(adapter, barcode, {
         forceRefresh,
         cached: cachedByRetailer.get(adapter.RETAILER) ?? null,
-        product: knownProduct,
+        product: productHint,
       }).catch((error) =>
         unavailable(adapter.RETAILER, barcode, `${adapter.RETAILER} lookup failed: ${error.message}`)
       )
@@ -192,10 +195,10 @@ async function getComparison(barcode, { forceRefresh = false } = {}) {
   const liveProduct = results.find((result) => result.available && result.name);
   const product = {
     barcode,
-    name: liveProduct?.name ?? knownProduct?.name ?? null,
-    brand: liveProduct?.brand ?? knownProduct?.brand ?? null,
-    pack_size: liveProduct?.pack_size ?? knownProduct?.pack_size ?? null,
-    image_url: liveProduct?.image_url ?? knownProduct?.image_url ?? null,
+    name: liveProduct?.name ?? productHint?.name ?? null,
+    brand: liveProduct?.brand ?? productHint?.brand ?? null,
+    pack_size: liveProduct?.pack_size ?? productHint?.pack_size ?? null,
+    image_url: liveProduct?.image_url ?? productHint?.image_url ?? null,
   };
 
   return { barcode, product, results };

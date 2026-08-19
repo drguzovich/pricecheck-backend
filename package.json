@@ -6,6 +6,7 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test:retailers": "node scripts/test-woolworths-adapter.js && node scripts/test-pnp-adapter.js",
+    "test:metadata": "node scripts/test-product-metadata.js",
     "verify:deployment": "node scripts/verify-deployment.js"
   },
   "keywords": [],
