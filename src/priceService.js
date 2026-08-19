@@ -10,6 +10,7 @@ const { sql } = require('./db');
 const woolworths = require('./scrapers/woolworths');
 const pickNPay = require('./scrapers/pnp');
 const checkers = require('./scrapers/checkers');
+const spar = require('./scrapers/spar');
 const { getProductMetadata } = require('./productMetadata');
 
 const CACHE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
@@ -17,7 +18,7 @@ const CACHE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 // a cold request. Keep a finite service-wide budget while allowing those
 // providers enough time to return a verified exact match.
 const RETAILER_TIMEOUT_MS = Number(process.env.RETAILER_TIMEOUT_MS || 20000);
-const RETAILERS = [woolworths, pickNPay, checkers];
+const RETAILERS = [woolworths, pickNPay, checkers, spar];
 
 async function upsertProduct(data) {
   await sql`
@@ -140,6 +141,7 @@ async function boundedScrape(adapter, barcode, product = null) {
       adapter.scrapeByBarcode(barcode, {
         timeoutMs: RETAILER_TIMEOUT_MS,
         productName: product?.name ?? null,
+        product,
       }),
       timeout,
     ]);
