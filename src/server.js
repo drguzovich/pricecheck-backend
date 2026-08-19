@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const cron = require('node-cron');
+const { createRateLimiter } = require('./rateLimit');
 
 const { initSchema } = require('./db');
 const {
@@ -19,6 +20,14 @@ const PORT = process.env.PORT || 3001;
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
+
+const rateLimitWindowMs = Number(process.env.API_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000);
+const rateLimitMaxRequests = Number(process.env.API_RATE_LIMIT_MAX_REQUESTS || 30);
+const priceRequestLimiter = createRateLimiter({
+  windowMs: rateLimitWindowMs,
+  maxRequests: rateLimitMaxRequests,
+});
+app.use((req, res, next) => (req.path === '/health' ? next() : priceRequestLimiter(req, res, next)));
 
 function validBarcode(barcode) {
   return /^\d{8,14}$/.test(barcode);
@@ -115,6 +124,11 @@ app.get('/search', async (req, res) => {
 });
 
 app.post('/admin/refresh-all', async (_req, res) => {
+  const requiredToken = process.env.ADMIN_REFRESH_TOKEN;
+  const providedToken = _req.get('x-admin-refresh-token');
+  if (!requiredToken || providedToken !== requiredToken) {
+    return res.status(404).json({ error: 'not_found' });
+  }
   const barcodes = await getAllTrackedBarcodes();
   (async () => {
     for (const barcode of barcodes) {

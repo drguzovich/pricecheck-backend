@@ -7,6 +7,7 @@
     "dev": "node --watch src/server.js",
     "test:retailers": "node scripts/test-woolworths-adapter.js && node scripts/test-pnp-adapter.js && node scripts/test-checkers-adapter.js",
     "test:metadata": "node scripts/test-product-metadata.js",
+    "test:rate-limit": "node scripts/test-rate-limit.js",
     "verify:deployment": "node scripts/verify-deployment.js"
   },
   "keywords": [],
