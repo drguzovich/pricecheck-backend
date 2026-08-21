@@ -110,4 +110,29 @@ async function listProductRequests(limit = 50) {
   `;
 }
 
-module.exports = { sql, initSchema, recordProductRequest, getProductRequest, listProductRequests };
+async function getCoverageStats() {
+  const [summary] = await sql`
+    SELECT
+      (SELECT COUNT(*) FROM products) AS tracked_products,
+      (SELECT COUNT(*) FROM product_requests) AS pending_product_requests,
+      (SELECT MAX(scraped_at) FROM retailer_prices) AS latest_price_update
+  `;
+  const retailers = await sql`
+    SELECT retailer, COUNT(DISTINCT product_id) AS product_count, MAX(scraped_at) AS latest_price_update
+    FROM retailer_prices
+    GROUP BY retailer
+    ORDER BY retailer ASC
+  `;
+  return {
+    tracked_products: Number(summary?.tracked_products ?? 0),
+    pending_product_requests: Number(summary?.pending_product_requests ?? 0),
+    latest_price_update: summary?.latest_price_update ?? null,
+    retailers: retailers.map((retailer) => ({
+      retailer: retailer.retailer,
+      product_count: Number(retailer.product_count ?? 0),
+      latest_price_update: retailer.latest_price_update ?? null,
+    })),
+  };
+}
+
+module.exports = { sql, initSchema, recordProductRequest, getProductRequest, listProductRequests, getCoverageStats };

@@ -6,7 +6,7 @@ const helmet = require('helmet');
 const cron = require('node-cron');
 const { createRateLimiter } = require('./rateLimit');
 
-const { initSchema, recordProductRequest, listProductRequests } = require('./db');
+const { initSchema, recordProductRequest, listProductRequests, getCoverageStats } = require('./db');
 const {
   getComparison,
   forceRefreshComparison,
@@ -66,6 +66,15 @@ function woolworthsLegacy(comparison) {
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+app.get('/coverage', async (_req, res) => {
+  try {
+    return res.json({ checked_at: new Date().toISOString(), ...(await getCoverageStats()) });
+  } catch (error) {
+    console.error('[server] Coverage status error:', error);
+    return res.status(503).json({ error: 'coverage_unavailable', message: 'Coverage status is temporarily unavailable' });
+  }
 });
 
 app.get('/price/:barcode', async (req, res) => {
