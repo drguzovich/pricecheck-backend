@@ -6,7 +6,7 @@
  * convert to cents before their local ranking and display logic.
  */
 
-const { sql } = require('./db');
+const { sql, getProductRequest } = require('./db');
 const woolworths = require('./scrapers/woolworths');
 const pickNPay = require('./scrapers/pnp');
 const checkers = require('./scrapers/checkers');
@@ -181,7 +181,14 @@ async function getComparison(barcode, { forceRefresh = false } = {}) {
   );
   const knownProduct = cachedRows[0] ?? null;
   const metadataProduct = knownProduct ? null : await getProductMetadata(barcode);
-  const productHint = knownProduct ?? metadataProduct;
+  const requestedProduct = knownProduct || metadataProduct ? null : await getProductRequest(barcode);
+  // A tester can add a label and pack size for a barcode that public metadata
+  // does not know. Reuse that hint on the next lookup so retailer providers can
+  // search by a meaningful product name while still requiring an exact EAN.
+  const requestHintProduct = requestedProduct?.product_hint
+    ? { barcode, name: requestedProduct.product_hint, brand: null, pack_size: null, image_url: null }
+    : null;
+  const productHint = knownProduct ?? metadataProduct ?? requestHintProduct;
   const results = await Promise.all(
     RETAILERS.map((adapter) =>
       getRetailerPrice(adapter, barcode, {

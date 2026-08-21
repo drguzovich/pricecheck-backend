@@ -91,4 +91,14 @@ async function recordProductRequest(barcode, productHint) {
   return request;
 }
 
-module.exports = { sql, initSchema, recordProductRequest };
+async function getProductRequest(barcode) {
+  const [request] = await sql`
+    SELECT barcode, product_hint, request_count, last_requested_at
+    FROM product_requests
+    WHERE barcode = ${barcode}
+    LIMIT 1
+  `;
+  return request ?? null;
+}
+
+module.exports = { sql, initSchema, recordProductRequest, getProductRequest };
