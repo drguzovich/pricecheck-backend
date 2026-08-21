@@ -262,8 +262,15 @@ async function searchProducts(query) {
 }
 
 async function getAllTrackedBarcodes() {
-  const rows = await sql`SELECT DISTINCT product_id FROM retailer_prices`;
-  return rows.map((row) => row.product_id);
+  const rows = await sql`
+    SELECT barcode
+    FROM (
+      SELECT DISTINCT product_id AS barcode FROM retailer_prices
+      UNION
+      SELECT barcode FROM product_requests
+    ) AS tracked_barcodes
+  `;
+  return rows.map((row) => row.barcode);
 }
 
 module.exports = {
