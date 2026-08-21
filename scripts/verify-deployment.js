@@ -30,6 +30,7 @@ function assert(condition, message) {
   const woolworths = known.body?.results?.find((result) => result.retailer === 'woolworths');
   assert(known.status === 200, `Known barcode returned HTTP ${known.status}`);
   assert(woolworths?.available && Number(woolworths.price) > 0, 'Known barcode did not return an available Woolworths price');
+  assert(woolworths.currency === 'ZAR', 'Known barcode did not return ZAR currency');
   assert(woolworths.updated_at, 'Woolworths result did not include an updated_at timestamp');
   const ageMinutes = (Date.now() - new Date(woolworths.updated_at).getTime()) / 60000;
   assert(ageMinutes <= maxFreshAgeMinutes, `Woolworths price is ${ageMinutes.toFixed(1)} minutes old, above the ${maxFreshAgeMinutes}-minute threshold`);
@@ -40,12 +41,16 @@ function assert(condition, message) {
   const unknown = await request(`/price/${unknownBarcode}`);
   assert(unknown.status === 404, `Unknown barcode returned HTTP ${unknown.status}, expected 404`);
 
+  const invalid = await request('/price/123');
+  assert(invalid.status === 400, `Invalid barcode returned HTTP ${invalid.status}, expected 400`);
+
   console.log(JSON.stringify({
     ok: true,
     health: health.body,
     woolworths: { price: woolworths.price, updated_at: woolworths.updated_at, age_minutes: Number(ageMinutes.toFixed(2)) },
     pick_n_pay: { available: Boolean(pnp?.available), error: pnp?.error ?? null },
     unknown_status: unknown.status,
+    invalid_status: invalid.status,
   }, null, 2));
 })().catch((error) => {
   console.error(`Deployment verification failed: ${error.message}`);

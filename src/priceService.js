@@ -80,13 +80,16 @@ async function getCachedComparisonRows(barcode) {
 }
 
 function unavailable(retailer, barcode, error, extra = {}) {
+  const updatedAt = extra.updated_at ?? null;
   return {
     retailer,
     barcode,
     available: false,
     price: null,
     price_str: null,
-    updated_at: extra.updated_at ?? null,
+    currency: 'ZAR',
+    updated_at: updatedAt,
+    updatedAt,
     url: extra.url ?? null,
     promo_flag: false,
     from_cache: Boolean(extra.from_cache),
@@ -96,6 +99,7 @@ function unavailable(retailer, barcode, error, extra = {}) {
 }
 
 function available(data, extra = {}) {
+  const updatedAt = data.scraped_at ?? data.updated_at;
   return {
     retailer: data.retailer,
     barcode: data.barcode,
@@ -106,7 +110,9 @@ function available(data, extra = {}) {
     image_url: data.image_url ?? null,
     price: Number(data.price),
     price_str: data.price_str ?? `R ${Number(data.price).toFixed(2)}`,
-    updated_at: data.scraped_at ?? data.updated_at,
+    currency: 'ZAR',
+    updated_at: updatedAt,
+    updatedAt,
     url: data.url ?? null,
     promo_flag: Boolean(data.promo_flag),
     from_cache: Boolean(extra.from_cache),

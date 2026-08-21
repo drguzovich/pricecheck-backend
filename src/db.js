@@ -101,4 +101,13 @@ async function getProductRequest(barcode) {
   return request ?? null;
 }
 
-module.exports = { sql, initSchema, recordProductRequest, getProductRequest };
+async function listProductRequests(limit = 50) {
+  return sql`
+    SELECT barcode, product_hint, request_count, first_requested_at, last_requested_at
+    FROM product_requests
+    ORDER BY request_count DESC, last_requested_at DESC
+    LIMIT ${limit}
+  `;
+}
+
+module.exports = { sql, initSchema, recordProductRequest, getProductRequest, listProductRequests };

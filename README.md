@@ -10,6 +10,8 @@ PriceCheck Backend is an Express service that returns a single, typed grocery-pr
 | `GET /price/:barcode` | Returns one product and a `results` array covering every configured retailer. The legacy top-level Woolworths fields are retained for the Expo Phase 1 client. |
 | `POST /price/:barcode/refresh` | Requests fresh retailer data while preserving the same response shape. |
 | `GET /search?q=<text>` | Searches products previously captured by the service. |
+| `POST /product-requests` | Stores a barcode and optional product hint when no live retailer listing is found. The hint is reused by future exact-EAN retailer retries. |
+| `GET /admin/product-requests` | Returns the prioritised missing-product coverage queue. Disabled unless the administrative token is configured. |
 | `POST /admin/refresh-all` | Schedules a refresh for the tracked barcode set and returns `202`. Disabled unless a server-side admin token is configured. |
 
 Barcodes must contain 8 to 14 digits. A `404` is returned when no retailer has an available result. A temporary service failure returns `503` rather than pretending that a product is unavailable.
@@ -48,7 +50,7 @@ Barcodes must contain 8 to 14 digits. A `404` is returned when no retailer has a
 
 ## Retailer sources and freshness
 
-The service uses a four-hour freshness window and stores price values as Postgres `NUMERIC` values. Each result explicitly identifies `available`, `from_cache`, `stale`, `updated_at`, and any retrieval error. The default per-retailer timeout is 20 seconds and can be set through `RETAILER_TIMEOUT_MS`.
+The service uses a four-hour freshness window and stores price values as Postgres `NUMERIC` values. Each result explicitly identifies `available`, `from_cache`, `stale`, `updated_at`, and any retrieval error. Retailer calls run independently through `Promise.allSettled` with an 11-second default timeout, while optional Open Food Facts metadata is capped at 3.5 seconds.
 
 | Retailer | Current connection | Operational note |
 |---|---|---|
@@ -64,6 +66,7 @@ Retailer grocery pricing and availability can vary by delivery area or store. Th
 ```sql
 products (barcode PK, name, brand, pack_size, image_url, created_at, updated_at)
 retailer_prices (id, retailer, product_id FK, price, price_str, scraped_at, url, promo_flag)
+product_requests (barcode PK, product_hint, request_count, first_requested_at, last_requested_at)
 ```
 
 ## Environment
@@ -72,13 +75,13 @@ retailer_prices (id, retailer, product_id FK, price, price_str, scraped_at, url,
 |---|---:|---|
 | `DATABASE_URL` | Yes | Neon Postgres connection string. |
 | `RETAILER_TIMEOUT_MS` | No | Bounded timeout per retailer lookup; defaults to `12000`. |
-| `METADATA_TIMEOUT_MS` | No | Bounded Open Food Facts product-metadata lookup; defaults to `7000`. |
+| `METADATA_TIMEOUT_MS` | No | Bounded Open Food Facts product-metadata lookup; defaults to `3500`. |
 | `PNP_PRODUCT_LOOKUP_URL` | No | Approved Pick n Pay product data URL containing `{barcode}`. |
 | `PARSE_API_KEY` | No | API key for Parse's managed Pick n Pay product-search provider. The service queries the canonical known product name and retains the barcode as PriceCheck's product identity. |
 | `PNP_PUBLIC_CATALOGUE_ENABLED` | No | Enables the experimental public-page lookup only after product/barcode validation. |
 | `API_RATE_LIMIT_WINDOW_MS` | No | Per-client request window; defaults to 15 minutes. |
 | `API_RATE_LIMIT_MAX_REQUESTS` | No | Maximum non-health API requests per client window; defaults to 30. |
-| `ADMIN_REFRESH_TOKEN` | No | Enables administrative refreshes only when matched in `x-admin-refresh-token`. |
+| `ADMIN_REFRESH_TOKEN` | No | Enables the administrative refresh and product-request queue routes only when matched in `x-admin-refresh-token`. |
 | `PLAYWRIGHT_BROWSERS_PATH` | Render configuration | Path used by the Render build cache for Chromium. |
 
 ## Local development

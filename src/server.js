@@ -6,7 +6,7 @@ const helmet = require('helmet');
 const cron = require('node-cron');
 const { createRateLimiter } = require('./rateLimit');
 
-const { initSchema, recordProductRequest } = require('./db');
+const { initSchema, recordProductRequest, listProductRequests } = require('./db');
 const {
   getComparison,
   forceRefreshComparison,
@@ -142,6 +142,24 @@ app.post('/product-requests', async (req, res) => {
   } catch (error) {
     console.error(`[server] Unable to save product request for ${barcode}:`, error);
     return res.status(503).json({ error: 'request_unavailable', message: 'Unable to save the product request right now' });
+  }
+});
+
+app.get('/admin/product-requests', async (req, res) => {
+  const requiredToken = process.env.ADMIN_REFRESH_TOKEN;
+  const providedToken = req.get('x-admin-refresh-token');
+  if (!requiredToken || providedToken !== requiredToken) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+
+  const requestedLimit = Number(req.query.limit || 50);
+  const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 50;
+  try {
+    const requests = await listProductRequests(limit);
+    return res.json({ requests });
+  } catch (error) {
+    console.error('[server] Unable to list product requests:', error);
+    return res.status(503).json({ error: 'request_queue_unavailable', message: 'Unable to load the coverage queue right now' });
   }
 });
 
