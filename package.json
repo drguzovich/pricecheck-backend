@@ -8,17 +8,23 @@
     "test:retailers": "node scripts/test-woolworths-adapter.js && node scripts/test-pnp-adapter.js && node scripts/test-checkers-adapter.js",
     "test:metadata": "node scripts/test-product-metadata.js",
     "test:rate-limit": "node scripts/test-rate-limit.js",
-    "verify:deployment": "node scripts/verify-deployment.js"
+    "verify:deployment": "node scripts/verify-deployment.js",
+    "alerts:run": "node scripts/run-alerts.js",
+    "seed:build": "node scripts/build-seed-candidates.js",
+    "seed:catalogue": "RETAILER_TIMEOUT_MS=4000 SEED_DELAY_MS=3000 node scripts/seed-catalogue.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "PriceCheck backend — Woolworths price scraper API with Neon Postgres",
   "dependencies": {
+    "@sentry/node": "^10.70.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "helmet": "^8.2.0",
+    "jsonwebtoken": "^9.0.3",
     "node-cron": "^4.4.1",
+    "nodemailer": "^9.0.5",
     "playwright": "^1.61.0",
     "postgres": "^3.4.5"
   }

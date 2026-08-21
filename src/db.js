@@ -79,6 +79,56 @@ async function initSchema() {
   await sql`ALTER TABLE product_requests ADD COLUMN IF NOT EXISTS last_retry_status TEXT`;
   await sql`ALTER TABLE product_requests ADD COLUMN IF NOT EXISTS last_retry_matched_retailers TEXT[] NOT NULL DEFAULT '{}'::TEXT[]`;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS users (
+      id           BIGSERIAL PRIMARY KEY,
+      google_id    TEXT NOT NULL UNIQUE,
+      email        TEXT NOT NULL,
+      display_name TEXT,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS scan_history (
+      id           BIGSERIAL PRIMARY KEY,
+      user_id      BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      barcode      TEXT NOT NULL,
+      product_name TEXT NOT NULL,
+      last_price   NUMERIC,
+      scanned_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_scan_history_user_date ON scan_history (user_id, scanned_at DESC)`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS favourites (
+      id           BIGSERIAL PRIMARY KEY,
+      user_id      BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      barcode      TEXT NOT NULL,
+      product_name TEXT NOT NULL,
+      added_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (user_id, barcode)
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_favourites_user_date ON favourites (user_id, added_at DESC)`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS price_alerts (
+      id              BIGSERIAL PRIMARY KEY,
+      user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      barcode         TEXT NOT NULL,
+      target_price    NUMERIC NOT NULL CHECK (target_price > 0),
+      email           TEXT NOT NULL,
+      active          BOOLEAN NOT NULL DEFAULT TRUE,
+      last_sent_at    TIMESTAMPTZ,
+      last_sent_price NUMERIC,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_price_alerts_active ON price_alerts (active, barcode)`;
+
   console.log('[db] Schema ready (Neon Postgres)');
 }
 
@@ -157,4 +207,153 @@ async function getCoverageStats() {
   };
 }
 
-module.exports = { sql, initSchema, recordProductRequest, getProductRequest, listProductRequests, recordProductRequestOutcome, getCoverageStats };
+async function checkDatabase() {
+  await sql`SELECT 1 AS connected`;
+  return true;
+}
+
+async function upsertUser(principal) {
+  const [user] = await sql`
+    INSERT INTO users (google_id, email, display_name)
+    VALUES (${principal.googleId}, ${principal.email}, ${principal.displayName ?? null})
+    ON CONFLICT (google_id) DO UPDATE
+    SET email = EXCLUDED.email,
+        display_name = COALESCE(EXCLUDED.display_name, users.display_name),
+        updated_at = NOW()
+    RETURNING id, google_id, email, display_name, created_at
+  `;
+  return user;
+}
+
+async function listScanHistory(userId, limit = 100) {
+  return sql`
+    SELECT id, barcode, product_name, last_price, scanned_at
+    FROM scan_history
+    WHERE user_id = ${userId}
+    ORDER BY scanned_at DESC
+    LIMIT ${limit}
+  `;
+}
+
+async function recordScan(userId, scan) {
+  const [entry] = await sql`
+    INSERT INTO scan_history (user_id, barcode, product_name, last_price, scanned_at)
+    VALUES (${userId}, ${scan.barcode}, ${scan.productName}, ${scan.lastPrice ?? null}, ${scan.scannedAt ?? new Date()})
+    RETURNING id, barcode, product_name, last_price, scanned_at
+  `;
+  return entry;
+}
+
+async function listFavourites(userId) {
+  return sql`
+    SELECT id, barcode, product_name, added_at
+    FROM favourites
+    WHERE user_id = ${userId}
+    ORDER BY added_at DESC
+  `;
+}
+
+async function addFavourite(userId, favourite) {
+  const [entry] = await sql`
+    INSERT INTO favourites (user_id, barcode, product_name)
+    VALUES (${userId}, ${favourite.barcode}, ${favourite.productName})
+    ON CONFLICT (user_id, barcode) DO UPDATE SET product_name = EXCLUDED.product_name
+    RETURNING id, barcode, product_name, added_at
+  `;
+  return entry;
+}
+
+async function removeFavourite(userId, barcode) {
+  const rows = await sql`
+    DELETE FROM favourites WHERE user_id = ${userId} AND barcode = ${barcode}
+    RETURNING id
+  `;
+  return rows.length > 0;
+}
+
+async function listAlerts(userId) {
+  return sql`
+    SELECT id, barcode, target_price, email, active, last_sent_at, last_sent_price, created_at
+    FROM price_alerts WHERE user_id = ${userId} ORDER BY active DESC, created_at DESC
+  `;
+}
+
+async function createAlert(userId, alert) {
+  const [entry] = await sql`
+    INSERT INTO price_alerts (user_id, barcode, target_price, email)
+    VALUES (${userId}, ${alert.barcode}, ${alert.targetPrice}, ${alert.email})
+    RETURNING id, barcode, target_price, email, active, created_at
+  `;
+  return entry;
+}
+
+async function deactivateAlert(userId, alertId) {
+  const rows = await sql`
+    UPDATE price_alerts SET active = FALSE WHERE id = ${alertId} AND user_id = ${userId} RETURNING id
+  `;
+  return rows.length > 0;
+}
+
+async function getActiveAlerts() {
+  return sql`
+    SELECT id, barcode, target_price, email, last_sent_at, last_sent_price
+    FROM price_alerts
+    WHERE active = TRUE
+    ORDER BY created_at ASC
+    LIMIT 500
+  `;
+}
+
+async function recordAlertSent(alertId, price) {
+  const [entry] = await sql`
+    UPDATE price_alerts
+    SET last_sent_at = NOW(), last_sent_price = ${price}
+    WHERE id = ${alertId}
+    RETURNING id, last_sent_at, last_sent_price
+  `;
+  return entry ?? null;
+}
+
+async function getUserSummary(userId) {
+  const [summary] = await sql`
+    SELECT
+      (SELECT COUNT(*) FROM scan_history WHERE user_id = ${userId}) AS scan_count,
+      (SELECT COUNT(*) FROM favourites WHERE user_id = ${userId}) AS favourites_count,
+      (SELECT COUNT(*) FROM price_alerts WHERE user_id = ${userId} AND active = TRUE) AS alerts_count
+  `;
+  return {
+    scanCount: Number(summary?.scan_count ?? 0),
+    favouritesCount: Number(summary?.favourites_count ?? 0),
+    alertsCount: Number(summary?.alerts_count ?? 0),
+  };
+}
+
+async function migrateGuestData(userId, payload) {
+  const scans = Array.isArray(payload.scans) ? payload.scans.slice(0, 250) : [];
+  const favouritesToAdd = Array.isArray(payload.favourites) ? payload.favourites.slice(0, 250) : [];
+  await sql.begin(async (transaction) => {
+    for (const scan of scans) {
+      if (!scan?.barcode || !scan?.productName) continue;
+      await transaction`
+        INSERT INTO scan_history (user_id, barcode, product_name, last_price, scanned_at)
+        VALUES (${userId}, ${String(scan.barcode)}, ${String(scan.productName).slice(0, 240)}, ${Number.isFinite(Number(scan.lastPrice)) ? Number(scan.lastPrice) : null}, ${scan.scannedAt ? new Date(scan.scannedAt) : new Date()})
+      `;
+    }
+    for (const favourite of favouritesToAdd) {
+      if (!favourite?.barcode || !favourite?.productName) continue;
+      await transaction`
+        INSERT INTO favourites (user_id, barcode, product_name)
+        VALUES (${userId}, ${String(favourite.barcode)}, ${String(favourite.productName).slice(0, 240)})
+        ON CONFLICT (user_id, barcode) DO UPDATE SET product_name = EXCLUDED.product_name
+      `;
+    }
+  });
+  return getUserSummary(userId);
+}
+
+module.exports = {
+  sql, initSchema, checkDatabase, recordProductRequest, getProductRequest, listProductRequests,
+  recordProductRequestOutcome, getCoverageStats, upsertUser, listScanHistory, recordScan,
+  listFavourites, addFavourite, removeFavourite, listAlerts, createAlert, deactivateAlert,
+  getActiveAlerts, recordAlertSent, getUserSummary, migrateGuestData,
+};

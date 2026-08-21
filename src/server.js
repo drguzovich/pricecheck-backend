@@ -4,9 +4,17 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const cron = require('node-cron');
+const Sentry = require('@sentry/node');
 const { createRateLimiter } = require('./rateLimit');
 
-const { initSchema, recordProductRequest, listProductRequests, getCoverageStats } = require('./db');
+const {
+  initSchema, checkDatabase, recordProductRequest, listProductRequests, getCoverageStats,
+  upsertUser, listScanHistory, recordScan, listFavourites, addFavourite, removeFavourite,
+  listAlerts, createAlert, deactivateAlert, getUserSummary, migrateGuestData,
+} = require('./db');
+const { requireUser } = require('./userAuth');
+const { processPriceAlerts } = require('./alerts');
+const { runSeed } = require('../scripts/seed-catalogue');
 const {
   getComparison,
   forceRefreshComparison,
@@ -17,8 +25,16 @@ const {
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+Sentry.init({ dsn: process.env.SENTRY_DSN || undefined, environment: process.env.NODE_ENV || 'development', enabled: Boolean(process.env.SENTRY_DSN) });
+
+const configuredOrigins = String(process.env.ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean);
+const allowOrigin = (origin, callback) => {
+  if (!origin || !configuredOrigins.length || configuredOrigins.includes(origin)) return callback(null, true);
+  return callback(new Error('Origin is not allowed by PriceCheck API policy'));
+};
+
 app.use(helmet());
-app.use(cors());
+app.use(cors({ origin: allowOrigin, methods: ['GET', 'POST', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-refresh-token'] }));
 app.use(express.json());
 
 const rateLimitWindowMs = Number(process.env.API_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000);
@@ -31,6 +47,11 @@ app.use((req, res, next) => (req.path === '/health' ? next() : priceRequestLimit
 
 function validBarcode(barcode) {
   return /^\d{8,14}$/.test(barcode);
+}
+
+function adminRefreshAllowed(req) {
+  const requiredToken = process.env.ADMIN_REFRESH_TOKEN;
+  return Boolean(requiredToken && req.get('x-admin-refresh-token') === requiredToken);
 }
 
 function comparisonResponse(comparison, legacy) {
@@ -64,8 +85,16 @@ function woolworthsLegacy(comparison) {
   };
 }
 
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+const startedAt = Date.now();
+let seedStatus = { state: 'idle', updatedAt: null, progress: null, error: null };
+
+app.get('/health', async (_req, res) => {
+  try {
+    await checkDatabase();
+    res.json({ status: 'ok', db: 'connected', uptime: Math.floor((Date.now() - startedAt) / 1000), timestamp: new Date().toISOString() });
+  } catch (_error) {
+    res.status(503).json({ status: 'unavailable', db: 'disconnected', uptime: Math.floor((Date.now() - startedAt) / 1000) });
+  }
 });
 
 app.get('/coverage', async (_req, res) => {
@@ -75,6 +104,21 @@ app.get('/coverage', async (_req, res) => {
     console.error('[server] Coverage status error:', error);
     return res.status(503).json({ error: 'coverage_unavailable', message: 'Coverage status is temporarily unavailable' });
   }
+});
+
+app.get('/admin/seed-catalogue', (req, res) => {
+  if (!adminRefreshAllowed(req)) return res.status(404).json({ error: 'not_found' });
+  return res.json(seedStatus);
+});
+
+app.post('/admin/seed-catalogue', (req, res) => {
+  if (!adminRefreshAllowed(req)) return res.status(404).json({ error: 'not_found' });
+  if (seedStatus.state === 'running') return res.status(409).json({ error: 'seed_running', message: 'A seed run is already in progress.', seed: seedStatus });
+  seedStatus = { state: 'running', updatedAt: new Date().toISOString(), progress: null, error: null };
+  runSeed({ onProgress: (progress) => { seedStatus = { state: 'running', updatedAt: new Date().toISOString(), progress, error: null }; } })
+    .then((result) => { seedStatus = { state: 'complete', updatedAt: new Date().toISOString(), progress: result, error: null }; })
+    .catch((error) => { Sentry.captureException(error); seedStatus = { state: 'failed', updatedAt: new Date().toISOString(), progress: null, error: error.message }; });
+  return res.status(202).json({ message: 'Verified catalogue seed started.', seed: seedStatus });
 });
 
 app.get('/price/:barcode', async (req, res) => {
@@ -154,6 +198,88 @@ app.post('/product-requests', async (req, res) => {
   }
 });
 
+function validPrice(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 100000;
+}
+
+app.post('/users/migrate', requireUser, async (req, res) => {
+  try {
+    const user = await upsertUser(req.user);
+    const summary = await migrateGuestData(user.id, req.body || {});
+    return res.json({ user, summary });
+  } catch (error) {
+    console.error('[server] Guest migration error:', error);
+    return res.status(503).json({ error: 'migration_unavailable', message: 'Unable to sync guest data right now.' });
+  }
+});
+
+app.get('/users/me', requireUser, async (req, res) => {
+  try {
+    const user = await upsertUser(req.user);
+    return res.json({ user, summary: await getUserSummary(user.id) });
+  } catch (_error) {
+    return res.status(503).json({ error: 'account_unavailable', message: 'Unable to load account details.' });
+  }
+});
+
+app.route('/users/scans')
+  .get(requireUser, async (req, res) => {
+    try {
+      const user = await upsertUser(req.user);
+      return res.json({ scans: await listScanHistory(user.id) });
+    } catch (_error) { return res.status(503).json({ error: 'history_unavailable', message: 'Unable to load scan history.' }); }
+  })
+  .post(requireUser, async (req, res) => {
+    const barcode = String(req.body?.barcode || '').replace(/\D/g, '');
+    const productName = String(req.body?.product_name || '').trim();
+    if (!validBarcode(barcode) || !productName || productName.length > 240) return res.status(400).json({ error: 'invalid_scan', message: 'A valid barcode and product name are required.' });
+    try {
+      const user = await upsertUser(req.user);
+      const lastPrice = validPrice(req.body?.last_price) ? Number(req.body.last_price) : null;
+      return res.status(201).json({ scan: await recordScan(user.id, { barcode, productName, lastPrice, scannedAt: req.body?.scanned_at }) });
+    } catch (_error) { return res.status(503).json({ error: 'history_unavailable', message: 'Unable to save this scan.' }); }
+  });
+
+app.route('/users/favourites')
+  .get(requireUser, async (req, res) => {
+    try { const user = await upsertUser(req.user); return res.json({ favourites: await listFavourites(user.id) }); }
+    catch (_error) { return res.status(503).json({ error: 'favourites_unavailable', message: 'Unable to load favourites.' }); }
+  })
+  .post(requireUser, async (req, res) => {
+    const barcode = String(req.body?.barcode || '').replace(/\D/g, '');
+    const productName = String(req.body?.product_name || '').trim();
+    if (!validBarcode(barcode) || !productName || productName.length > 240) return res.status(400).json({ error: 'invalid_favourite', message: 'A valid product is required.' });
+    try { const user = await upsertUser(req.user); return res.status(201).json({ favourite: await addFavourite(user.id, { barcode, productName }) }); }
+    catch (_error) { return res.status(503).json({ error: 'favourites_unavailable', message: 'Unable to save favourite.' }); }
+  })
+  .delete(requireUser, async (req, res) => {
+    const barcode = String(req.query.barcode || '').replace(/\D/g, '');
+    if (!validBarcode(barcode)) return res.status(400).json({ error: 'invalid_barcode', message: 'A valid barcode is required.' });
+    try { const user = await upsertUser(req.user); return res.json({ removed: await removeFavourite(user.id, barcode) }); }
+    catch (_error) { return res.status(503).json({ error: 'favourites_unavailable', message: 'Unable to remove favourite.' }); }
+  });
+
+app.route('/users/alerts')
+  .get(requireUser, async (req, res) => {
+    try { const user = await upsertUser(req.user); return res.json({ alerts: await listAlerts(user.id) }); }
+    catch (_error) { return res.status(503).json({ error: 'alerts_unavailable', message: 'Unable to load price alerts.' }); }
+  })
+  .post(requireUser, async (req, res) => {
+    const barcode = String(req.body?.barcode || '').replace(/\D/g, '');
+    if (!validBarcode(barcode) || !validPrice(req.body?.target_price)) return res.status(400).json({ error: 'invalid_alert', message: 'A valid barcode and target price are required.' });
+    try {
+      const user = await upsertUser(req.user);
+      return res.status(201).json({ alert: await createAlert(user.id, { barcode, targetPrice: Number(req.body.target_price), email: user.email }) });
+    } catch (_error) { return res.status(503).json({ error: 'alerts_unavailable', message: 'Unable to create price alert.' }); }
+  })
+  .delete(requireUser, async (req, res) => {
+    const alertId = Number(req.query.id);
+    if (!Number.isInteger(alertId) || alertId < 1) return res.status(400).json({ error: 'invalid_alert', message: 'A valid alert is required.' });
+    try { const user = await upsertUser(req.user); return res.json({ removed: await deactivateAlert(user.id, alertId) }); }
+    catch (_error) { return res.status(503).json({ error: 'alerts_unavailable', message: 'Unable to remove price alert.' }); }
+  });
+
 app.get('/admin/product-requests', async (req, res) => {
   const requiredToken = process.env.ADMIN_REFRESH_TOKEN;
   const providedToken = req.get('x-admin-refresh-token');
@@ -194,6 +320,19 @@ cron.schedule('0 */6 * * *', async () => {
     try { await forceRefreshComparison(barcode); }
     catch (error) { console.error(`[cron] Refresh failed for ${barcode}: ${error.message}`); }
   }
+  try {
+    const result = await processPriceAlerts();
+    console.log(`[cron] Price alerts processed: ${JSON.stringify(result)}`);
+  } catch (error) {
+    Sentry.captureException(error);
+    console.error(`[cron] Price alert processing failed: ${error.message}`);
+  }
+});
+
+app.use((error, _req, res, _next) => {
+  Sentry.captureException(error);
+  if (error.message?.includes('Origin is not allowed')) return res.status(403).json({ error: 'origin_not_allowed', message: 'This website is not authorised to call the PriceCheck API.' });
+  return res.status(500).json({ error: 'internal_error', message: 'PriceCheck encountered an unexpected error.' });
 });
 
 (async () => {

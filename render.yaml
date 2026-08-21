@@ -21,3 +21,25 @@ services:
         value: /opt/render/project/.cache/playwright
       - key: DATABASE_URL
         sync: false   # value is set manually in the Render dashboard — never committed
+      - key: PARSE_API_KEY
+        sync: false
+      - key: USER_SYNC_JWT_SECRET
+        sync: false
+      - key: ADMIN_REFRESH_TOKEN
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: PRICECHECK_WEB_URL
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: SENTRY_DSN
+        sync: false

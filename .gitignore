@@ -1,5 +1,6 @@
 node_modules/
-data/
+data/*
+!data/seed-candidates.json
 *.db
 *.db-shm
 *.db-wal
