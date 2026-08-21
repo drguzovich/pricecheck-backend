@@ -17,7 +17,7 @@ const CACHE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 // Managed retailer providers can take longer than direct product documents on
 // a cold request. Keep a finite service-wide budget while allowing those
 // providers enough time to return a verified exact match.
-const RETAILER_TIMEOUT_MS = Number(process.env.RETAILER_TIMEOUT_MS || 20000);
+const RETAILER_TIMEOUT_MS = Number(process.env.RETAILER_TIMEOUT_MS || 11000);
 const RETAILERS = [woolworths, pickNPay, checkers, spar];
 
 async function upsertProduct(data) {
@@ -189,16 +189,19 @@ async function getComparison(barcode, { forceRefresh = false } = {}) {
     ? { barcode, name: requestedProduct.product_hint, brand: null, pack_size: null, image_url: null }
     : null;
   const productHint = knownProduct ?? metadataProduct ?? requestHintProduct;
-  const results = await Promise.all(
+  const settled = await Promise.allSettled(
     RETAILERS.map((adapter) =>
       getRetailerPrice(adapter, barcode, {
         forceRefresh,
         cached: cachedByRetailer.get(adapter.RETAILER) ?? null,
         product: productHint,
-      }).catch((error) =>
-        unavailable(adapter.RETAILER, barcode, `${adapter.RETAILER} lookup failed: ${error.message}`)
-      )
+      })
     )
+  );
+  const results = settled.map((outcome, index) =>
+    outcome.status === 'fulfilled'
+      ? outcome.value
+      : unavailable(RETAILERS[index].RETAILER, barcode, `${RETAILERS[index].RETAILER} lookup failed: ${outcome.reason?.message || 'unknown error'}`)
   );
 
   const liveProduct = results.find((result) => result.available && result.name);

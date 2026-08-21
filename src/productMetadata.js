@@ -1,7 +1,9 @@
 'use strict';
 
 const OPEN_FOOD_FACTS_BASE = 'https://world.openfoodfacts.org/api/v2/product';
-const METADATA_TIMEOUT_MS = Number(process.env.METADATA_TIMEOUT_MS || 7000);
+// Metadata enriches the display, but retailer availability must not wait so long
+// that a single public catalogue lookup makes the whole comparison feel stuck.
+const METADATA_TIMEOUT_MS = Number(process.env.METADATA_TIMEOUT_MS || 3500);
 
 async function getProductMetadata(barcode) {
   const controller = new AbortController();
