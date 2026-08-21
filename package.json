@@ -5,8 +5,10 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "test": "npm run test:rate-limit && npm run test:metadata-parser",
     "test:retailers": "node scripts/test-woolworths-adapter.js && node scripts/test-pnp-adapter.js && node scripts/test-checkers-adapter.js",
     "test:metadata": "node scripts/test-product-metadata.js",
+    "test:metadata-parser": "node scripts/test-product-metadata-parser.js",
     "test:rate-limit": "node scripts/test-rate-limit.js",
     "verify:deployment": "node scripts/verify-deployment.js",
     "alerts:run": "node scripts/run-alerts.js",
