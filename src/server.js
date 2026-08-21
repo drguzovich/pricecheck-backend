@@ -6,7 +6,7 @@ const helmet = require('helmet');
 const cron = require('node-cron');
 const { createRateLimiter } = require('./rateLimit');
 
-const { initSchema } = require('./db');
+const { initSchema, recordProductRequest } = require('./db');
 const {
   getComparison,
   forceRefreshComparison,
@@ -120,6 +120,28 @@ app.get('/search', async (req, res) => {
   } catch (error) {
     console.error('[server] Search error:', error);
     return res.status(503).json({ error: 'search_unavailable', message: 'Search is temporarily unavailable' });
+  }
+});
+
+app.post('/product-requests', async (req, res) => {
+  const barcode = String(req.body?.barcode || '').replace(/\D/g, '');
+  const productHint = typeof req.body?.product_hint === 'string' ? req.body.product_hint.trim() : '';
+  if (!validBarcode(barcode)) {
+    return res.status(400).json({ error: 'invalid_barcode', message: 'Barcode must be 8–14 digits' });
+  }
+  if (productHint.length > 140) {
+    return res.status(400).json({ error: 'invalid_product_hint', message: 'Product hint must be 140 characters or fewer' });
+  }
+
+  try {
+    const request = await recordProductRequest(barcode, productHint);
+    return res.status(201).json({
+      message: 'Product request saved for coverage review',
+      request,
+    });
+  } catch (error) {
+    console.error(`[server] Unable to save product request for ${barcode}:`, error);
+    return res.status(503).json({ error: 'request_unavailable', message: 'Unable to save the product request right now' });
   }
 });
 

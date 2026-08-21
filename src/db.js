@@ -59,7 +59,36 @@ async function initSchema() {
       ON retailer_prices (retailer, product_id, scraped_at DESC)
   `;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS product_requests (
+      barcode            TEXT PRIMARY KEY,
+      product_hint       TEXT,
+      request_count      INTEGER     NOT NULL DEFAULT 1,
+      first_requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_requested_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_product_requests_recent
+      ON product_requests (last_requested_at DESC)
+  `;
+
   console.log('[db] Schema ready (Neon Postgres)');
 }
 
-module.exports = { sql, initSchema };
+async function recordProductRequest(barcode, productHint) {
+  const hint = productHint?.trim() || null;
+  const [request] = await sql`
+    INSERT INTO product_requests (barcode, product_hint)
+    VALUES (${barcode}, ${hint})
+    ON CONFLICT (barcode) DO UPDATE
+    SET request_count = product_requests.request_count + 1,
+        product_hint = COALESCE(EXCLUDED.product_hint, product_requests.product_hint),
+        last_requested_at = NOW()
+    RETURNING barcode, product_hint, request_count, last_requested_at
+  `;
+  return request;
+}
+
+module.exports = { sql, initSchema, recordProductRequest };
