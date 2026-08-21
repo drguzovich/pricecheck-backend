@@ -130,53 +130,46 @@ async function lookupParseProvider(barcode, productName, timeoutMs) {
   const apiKey = process.env.PARSE_API_KEY;
   if (!apiKey) return unavailable(barcode, 'Pick n Pay provider key is not configured');
 
-  const query = productName || barcode;
-  const url = new URL(PARSE_SEARCH_URL);
-  url.searchParams.set('page', '0');
-  url.searchParams.set('sort', 'relevance');
-  url.searchParams.set('query', query);
-  url.searchParams.set('page_size', '8');
-
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, {
-      headers: { Accept: 'application/json', 'X-API-Key': apiKey },
-      signal: controller.signal,
-    });
-    if (response.status === 404) return unavailable(barcode, 'Product not found at Pick n Pay');
-    if (!response.ok) return unavailable(barcode, `Pick n Pay provider returned HTTP ${response.status}`);
+    const queries = [barcode, ...(productName && productName !== barcode ? [productName] : [])];
+    for (const query of queries) {
+      const url = new URL(PARSE_SEARCH_URL);
+      url.searchParams.set('page', '0');
+      url.searchParams.set('sort', 'relevance');
+      url.searchParams.set('query', query);
+      url.searchParams.set('page_size', '12');
+      const response = await fetch(url, {
+        headers: { Accept: 'application/json', 'X-API-Key': apiKey },
+        signal: controller.signal,
+      });
+      if (response.status === 404) continue;
+      if (!response.ok) return unavailable(barcode, `Pick n Pay provider returned HTTP ${response.status}`);
 
-    const payload = await response.json();
-    const candidates = payload?.data?.products ?? payload?.products ?? [];
-    const normalizedQuery = query.toLowerCase();
-    const specificTerms = normalizedQuery
-      .replace(/\b\d+\s*(?:g|kg|ml|l)\b/g, ' ')
-      .split(/[^a-z]+/)
-      .filter((term) => term.length >= 3 && !['rusk', 'rusks', 'buttermilk'].includes(term));
-    const candidate = candidates.find((item) => {
-      const name = item?.name?.toLowerCase() || '';
-      const productNameMatches = name.includes(normalizedQuery) || (specificTerms.length > 0 && specificTerms.every((term) => name.includes(term)));
-      return productNameMatches && hasExactBarcode(item, barcode);
-    }) ?? null;
-    const price = extractPrice(candidate);
-    if (!candidate || !price) return unavailable(barcode, 'Pick n Pay provider did not return an exact barcode match with a usable price');
+      const payload = await response.json();
+      const candidates = payload?.data?.products ?? payload?.products ?? [];
+      const candidate = candidates.find((item) => hasExactBarcode(item, barcode)) ?? null;
+      const price = extractPrice(candidate);
+      if (!candidate || !price) continue;
 
-    const name = candidate.name ?? null;
-    return {
-      barcode,
-      name,
-      brand: candidate.brand?.name ?? candidate.brand ?? null,
-      pack_size: candidate.packSize ?? candidate.size ?? name?.match(/(\d+\s*(?:g|kg|ml|l|L))\b/i)?.[1] ?? null,
-      image_url: candidate.images?.[0]?.url ?? candidate.image ?? candidate.imageUrl ?? null,
-      price,
-      price_str: candidate.price?.formattedValue ?? `R ${price.toFixed(2)}`,
-      url: candidate.url ?? candidate.productUrl ?? null,
-      promo_flag: Boolean(candidate.potentialPromotions?.length || candidate.promo || candidate.onPromotion || candidate.special),
-      scraped_at: new Date().toISOString(),
-      retailer: RETAILER,
-      error: null,
-    };
+      const name = candidate.name ?? null;
+      return {
+        barcode,
+        name,
+        brand: candidate.brand?.name ?? candidate.brand ?? null,
+        pack_size: candidate.packSize ?? candidate.size ?? name?.match(/(\d+\s*(?:g|kg|ml|l|L))\b/i)?.[1] ?? null,
+        image_url: candidate.images?.[0]?.url ?? candidate.image ?? candidate.imageUrl ?? null,
+        price,
+        price_str: candidate.price?.formattedValue ?? `R ${price.toFixed(2)}`,
+        url: candidate.url ?? candidate.productUrl ?? null,
+        promo_flag: Boolean(candidate.potentialPromotions?.length || candidate.promo || candidate.onPromotion || candidate.special),
+        scraped_at: new Date().toISOString(),
+        retailer: RETAILER,
+        error: null,
+      };
+    }
+    return unavailable(barcode, 'Pick n Pay provider did not return an exact barcode match with a usable price');
   } catch (error) {
     const message = error.name === 'AbortError' ? 'Pick n Pay provider request timed out' : `Pick n Pay provider request failed: ${error.message}`;
     return unavailable(barcode, message);
