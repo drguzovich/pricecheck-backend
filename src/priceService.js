@@ -6,7 +6,7 @@
  * convert to cents before their local ranking and display logic.
  */
 
-const { sql, getProductRequest } = require('./db');
+const { sql, getProductRequest, recordProductRequestOutcome } = require('./db');
 const woolworths = require('./scrapers/woolworths');
 const pickNPay = require('./scrapers/pnp');
 const checkers = require('./scrapers/checkers');
@@ -218,6 +218,12 @@ async function getComparison(barcode, { forceRefresh = false } = {}) {
     pack_size: liveProduct?.pack_size ?? productHint?.pack_size ?? null,
     image_url: liveProduct?.image_url ?? productHint?.image_url ?? null,
   };
+
+  if (requestedProduct) {
+    recordProductRequestOutcome(barcode, results).catch((error) => {
+      console.error(`[priceService] Unable to record product-request outcome for ${barcode}: ${error.message}`);
+    });
+  }
 
   return { barcode, product, results };
 }

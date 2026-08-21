@@ -74,6 +74,11 @@ async function initSchema() {
       ON product_requests (last_requested_at DESC)
   `;
 
+  await sql`ALTER TABLE product_requests ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0`;
+  await sql`ALTER TABLE product_requests ADD COLUMN IF NOT EXISTS last_retry_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE product_requests ADD COLUMN IF NOT EXISTS last_retry_status TEXT`;
+  await sql`ALTER TABLE product_requests ADD COLUMN IF NOT EXISTS last_retry_matched_retailers TEXT[] NOT NULL DEFAULT '{}'::TEXT[]`;
+
   console.log('[db] Schema ready (Neon Postgres)');
 }
 
@@ -93,7 +98,8 @@ async function recordProductRequest(barcode, productHint) {
 
 async function getProductRequest(barcode) {
   const [request] = await sql`
-    SELECT barcode, product_hint, request_count, last_requested_at
+    SELECT barcode, product_hint, request_count, last_requested_at, retry_count,
+           last_retry_at, last_retry_status, last_retry_matched_retailers
     FROM product_requests
     WHERE barcode = ${barcode}
     LIMIT 1
@@ -103,18 +109,34 @@ async function getProductRequest(barcode) {
 
 async function listProductRequests(limit = 50) {
   return sql`
-    SELECT barcode, product_hint, request_count, first_requested_at, last_requested_at
+    SELECT barcode, product_hint, request_count, first_requested_at, last_requested_at,
+           retry_count, last_retry_at, last_retry_status, last_retry_matched_retailers
     FROM product_requests
     ORDER BY request_count DESC, last_requested_at DESC
     LIMIT ${limit}
   `;
 }
 
+async function recordProductRequestOutcome(barcode, results) {
+  const matchedRetailers = results.filter((result) => result.available).map((result) => result.retailer);
+  const status = matchedRetailers.length > 0 ? 'resolved' : 'unavailable';
+  const [request] = await sql`
+    UPDATE product_requests
+    SET retry_count = product_requests.retry_count + 1,
+        last_retry_at = NOW(),
+        last_retry_status = ${status},
+        last_retry_matched_retailers = ${matchedRetailers}
+    WHERE barcode = ${barcode}
+    RETURNING barcode, retry_count, last_retry_at, last_retry_status, last_retry_matched_retailers
+  `;
+  return request ?? null;
+}
+
 async function getCoverageStats() {
   const [summary] = await sql`
     SELECT
       (SELECT COUNT(*) FROM products) AS tracked_products,
-      (SELECT COUNT(*) FROM product_requests) AS pending_product_requests,
+      (SELECT COUNT(*) FROM product_requests WHERE COALESCE(last_retry_status, 'pending') <> 'resolved') AS pending_product_requests,
       (SELECT MAX(scraped_at) FROM retailer_prices) AS latest_price_update
   `;
   const retailers = await sql`
@@ -135,4 +157,4 @@ async function getCoverageStats() {
   };
 }
 
-module.exports = { sql, initSchema, recordProductRequest, getProductRequest, listProductRequests, getCoverageStats };
+module.exports = { sql, initSchema, recordProductRequest, getProductRequest, listProductRequests, recordProductRequestOutcome, getCoverageStats };
