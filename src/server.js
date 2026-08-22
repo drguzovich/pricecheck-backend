@@ -52,7 +52,7 @@ const priceRequestLimiter = createRateLimiter({
   windowMs: rateLimitWindowMs,
   maxRequests: rateLimitMaxRequests,
 });
-const apiPrefix = (pathName) => ['/price', '/search', '/product-requests', '/users', '/coverage', '/admin']
+const apiPrefix = (pathName) => ['/price', '/search', '/api/search', '/product-requests', '/users', '/coverage', '/admin']
   .some((prefix) => pathName === prefix || pathName.startsWith(`${prefix}/`));
 app.use((req, res, nextMiddleware) => {
   // Application documents and Next assets must not consume the bounded API
@@ -181,7 +181,7 @@ app.post('/price/:barcode/refresh', async (req, res) => {
   }
 });
 
-app.get('/search', async (req, res) => {
+async function handleSearch(req, res) {
   const query = String(req.query.q || '').trim();
   if (query.length < 2) return res.status(400).json({ error: 'invalid_query', message: 'Search query must contain at least 2 characters' });
   try {
@@ -190,6 +190,16 @@ app.get('/search', async (req, res) => {
     console.error('[server] Search error:', error);
     return res.status(503).json({ error: 'search_unavailable', message: 'Search is temporarily unavailable' });
   }
+}
+
+// `/search` is a PWA document route. Preserve the original JSON endpoint for
+// API callers while allowing standard browser navigation to fall through to
+// Next.js, which renders the Search screen.
+app.get('/api/search', handleSearch);
+app.get('/search', (req, res, nextMiddleware) => {
+  const accept = req.get('accept') || '';
+  if (accept.includes('text/html') || accept.includes('application/xhtml+xml')) return nextMiddleware();
+  return handleSearch(req, res);
 });
 
 app.post('/product-requests', async (req, res) => {

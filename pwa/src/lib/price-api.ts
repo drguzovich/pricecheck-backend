@@ -85,7 +85,7 @@ export async function getComparison(barcode: string, refresh = false) {
 
 export async function searchProducts(query: string) {
   return request<{ results: SearchProduct[]; error?: string; message?: string }>(
-    `/search?q=${encodeURIComponent(query)}`,
+    `/api/search?q=${encodeURIComponent(query)}`,
   );
 }
 
