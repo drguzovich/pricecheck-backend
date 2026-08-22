@@ -1,10 +1,13 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const cron = require('node-cron');
 const Sentry = require('@sentry/node');
+const next = require('next');
 const { createRateLimiter } = require('./rateLimit');
 
 const {
@@ -24,6 +27,10 @@ const {
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const pwaDirectory = path.join(__dirname, '..', 'pwa');
+const servePwa = process.env.NODE_ENV === 'production' && fs.existsSync(pwaDirectory);
+const nextApp = servePwa ? next({ dev: false, dir: pwaDirectory }) : null;
+let nextRequestHandler = null;
 
 Sentry.init({ dsn: process.env.SENTRY_DSN || undefined, environment: process.env.NODE_ENV || 'development', enabled: Boolean(process.env.SENTRY_DSN) });
 
@@ -33,7 +40,9 @@ const allowOrigin = (origin, callback) => {
   return callback(new Error('Origin is not allowed by PriceCheck API policy'));
 };
 
-app.use(helmet());
+// The PWA is served by Next.js from this same process. Next emits inline
+// bootstrap scripts, so its own response headers remain authoritative.
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: allowOrigin, methods: ['GET', 'POST', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-refresh-token'] }));
 app.use(express.json());
 
@@ -43,7 +52,14 @@ const priceRequestLimiter = createRateLimiter({
   windowMs: rateLimitWindowMs,
   maxRequests: rateLimitMaxRequests,
 });
-app.use((req, res, next) => (req.path === '/health' ? next() : priceRequestLimiter(req, res, next)));
+const apiPrefix = (pathName) => ['/price', '/search', '/product-requests', '/users', '/coverage', '/admin']
+  .some((prefix) => pathName === prefix || pathName.startsWith(`${prefix}/`));
+app.use((req, res, nextMiddleware) => {
+  // Application documents and Next assets must not consume the bounded API
+  // quota. Comparison and account paths retain their existing protection.
+  if (req.path === '/health' || !apiPrefix(req.path)) return nextMiddleware();
+  return priceRequestLimiter(req, res, nextMiddleware);
+});
 
 function validBarcode(barcode) {
   return /^\d{8,14}$/.test(barcode);
@@ -329,6 +345,13 @@ cron.schedule('0 */6 * * *', async () => {
   }
 });
 
+if (nextApp) {
+  app.use((req, res, nextMiddleware) => {
+    if (!nextRequestHandler) return nextMiddleware();
+    return Promise.resolve(nextRequestHandler(req, res)).catch(nextMiddleware);
+  });
+}
+
 app.use((error, _req, res, _next) => {
   Sentry.captureException(error);
   if (error.message?.includes('Origin is not allowed')) return res.status(403).json({ error: 'origin_not_allowed', message: 'This website is not authorised to call the PriceCheck API.' });
@@ -338,6 +361,11 @@ app.use((error, _req, res, _next) => {
 (async () => {
   try {
     await initSchema();
+    if (nextApp) {
+      await nextApp.prepare();
+      nextRequestHandler = nextApp.getRequestHandler();
+      console.log('[server] PriceCheck PWA is ready on the same public origin as the comparison API');
+    }
     app.listen(PORT, () => console.log(`[server] PriceCheck backend listening on ${PORT}`));
   } catch (error) {
     console.error('[server] Failed to initialise database schema:', error);

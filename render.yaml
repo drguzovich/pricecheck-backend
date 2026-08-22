@@ -8,7 +8,8 @@ services:
     # can find.  --with-deps is omitted because Render's build sandbox does
     # not allow apt-get / root-level package installs.
     buildCommand: >-
-      npm install &&
+      npm install --legacy-peer-deps &&
+      npm run build:pwa &&
       PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/.cache/playwright
       npx playwright install chromium
     startCommand: npm start
@@ -30,6 +31,14 @@ services:
       - key: ALLOWED_ORIGINS
         sync: false
       - key: PRICECHECK_WEB_URL
+        sync: false
+      - key: NEXTAUTH_URL
+        sync: false
+      - key: NEXTAUTH_SECRET
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
         sync: false
       - key: SMTP_HOST
         sync: false

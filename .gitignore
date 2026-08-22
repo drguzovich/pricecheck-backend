@@ -1,4 +1,5 @@
 node_modules/
+pwa/.next/
 data/*
 !data/seed-candidates.json
 *.db

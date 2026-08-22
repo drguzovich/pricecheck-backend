@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="PriceCheck icon">
+  <defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#00bfa5"/><stop offset="1" stop-color="#00e676"/></linearGradient></defs>
+  <rect width="512" height="512" rx="108" fill="#121212"/>
+  <rect x="48" y="48" width="416" height="416" rx="88" fill="url(#g)"/>
+  <path fill="#042b23" d="M176 136h113c70 0 111 37 111 96 0 60-44 98-115 98h-42v69h-67V136Zm67 54v86h35c35 0 53-14 53-43 0-28-18-43-53-43h-35Z"/>
+</svg>
