@@ -89,6 +89,8 @@ async function initSchema() {
       updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider TEXT NOT NULL DEFAULT 'google'`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS scan_history (
@@ -213,9 +215,11 @@ async function checkDatabase() {
 }
 
 async function upsertUser(principal) {
+  const accountId = principal.accountId ?? principal.googleId;
+  if (!accountId) throw new Error('Account identity is required.');
   const [user] = await sql`
     INSERT INTO users (google_id, email, display_name)
-    VALUES (${principal.googleId}, ${principal.email}, ${principal.displayName ?? null})
+    VALUES (${accountId}, ${principal.email}, ${principal.displayName ?? null})
     ON CONFLICT (google_id) DO UPDATE
     SET email = EXCLUDED.email,
         display_name = COALESCE(EXCLUDED.display_name, users.display_name),
@@ -223,6 +227,29 @@ async function upsertUser(principal) {
     RETURNING id, google_id, email, display_name, created_at
   `;
   return user;
+}
+
+async function createPasswordUser({ email, displayName, passwordHash }) {
+  const accountId = `password:${email}`;
+  const [existing] = await sql`SELECT id FROM users WHERE google_id = ${accountId} LIMIT 1`;
+  if (existing) return { duplicate: true, user: null };
+  const [user] = await sql`
+    INSERT INTO users (google_id, email, display_name, password_hash, auth_provider)
+    VALUES (${accountId}, ${email}, ${displayName}, ${passwordHash}, 'password')
+    RETURNING id, google_id AS account_id, email, display_name, created_at
+  `;
+  return { duplicate: false, user };
+}
+
+async function getPasswordUser(email) {
+  const accountId = `password:${email}`;
+  const [user] = await sql`
+    SELECT id, google_id AS account_id, email, display_name, password_hash
+    FROM users
+    WHERE google_id = ${accountId} AND auth_provider = 'password'
+    LIMIT 1
+  `;
+  return user ?? null;
 }
 
 async function listScanHistory(userId, limit = 100) {
@@ -353,7 +380,7 @@ async function migrateGuestData(userId, payload) {
 
 module.exports = {
   sql, initSchema, checkDatabase, recordProductRequest, getProductRequest, listProductRequests,
-  recordProductRequestOutcome, getCoverageStats, upsertUser, listScanHistory, recordScan,
+  recordProductRequestOutcome, getCoverageStats, upsertUser, createPasswordUser, getPasswordUser, listScanHistory, recordScan,
   listFavourites, addFavourite, removeFavourite, listAlerts, createAlert, deactivateAlert,
   getActiveAlerts, recordAlertSent, getUserSummary, migrateGuestData,
 };

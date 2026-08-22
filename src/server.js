@@ -12,10 +12,10 @@ const { createRateLimiter } = require('./rateLimit');
 
 const {
   initSchema, checkDatabase, recordProductRequest, listProductRequests, getCoverageStats,
-  upsertUser, listScanHistory, recordScan, listFavourites, addFavourite, removeFavourite,
+  upsertUser, createPasswordUser, getPasswordUser, listScanHistory, recordScan, listFavourites, addFavourite, removeFavourite,
   listAlerts, createAlert, deactivateAlert, getUserSummary, migrateGuestData,
 } = require('./db');
-const { requireUser } = require('./userAuth');
+const { hashPassword, normalizeEmail, requireUser, validateRegistration, verifyPassword } = require('./userAuth');
 const { processPriceAlerts } = require('./alerts');
 const { runSeed } = require('../scripts/seed-catalogue');
 const {
@@ -52,7 +52,8 @@ const priceRequestLimiter = createRateLimiter({
   windowMs: rateLimitWindowMs,
   maxRequests: rateLimitMaxRequests,
 });
-const apiPrefix = (pathName) => ['/price', '/search', '/api/search', '/product-requests', '/users', '/coverage', '/admin']
+const authRequestLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 10 });
+const apiPrefix = (pathName) => ['/price', '/search', '/api/search', '/auth', '/product-requests', '/users', '/coverage', '/admin']
   .some((prefix) => pathName === prefix || pathName.startsWith(`${prefix}/`));
 app.use((req, res, nextMiddleware) => {
   // Application documents and Next assets must not consume the bounded API
@@ -60,6 +61,7 @@ app.use((req, res, nextMiddleware) => {
   if (req.path === '/health' || !apiPrefix(req.path)) return nextMiddleware();
   return priceRequestLimiter(req, res, nextMiddleware);
 });
+app.use('/auth', authRequestLimiter);
 
 function validBarcode(barcode) {
   return /^\d{8,14}$/.test(barcode);
@@ -228,6 +230,47 @@ function validPrice(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 && parsed <= 100000;
 }
+
+function publicAccount(user) {
+  return {
+    accountId: user.account_id,
+    email: user.email,
+    displayName: user.display_name ?? null,
+  };
+}
+
+app.post('/auth/register', async (req, res) => {
+  const validated = validateRegistration(req.body || {});
+  if (validated.error) return res.status(400).json({ error: 'invalid_registration', message: validated.error });
+  try {
+    const created = await createPasswordUser({
+      email: validated.email,
+      displayName: validated.displayName,
+      passwordHash: await hashPassword(req.body.password),
+    });
+    if (created.duplicate) return res.status(409).json({ error: 'account_exists', message: 'An account already exists for this email. Sign in instead.' });
+    return res.status(201).json({ user: publicAccount(created.user) });
+  } catch (error) {
+    console.error('[server] Direct account registration error:', error.message);
+    return res.status(503).json({ error: 'registration_unavailable', message: 'Unable to create an account right now. Please try again.' });
+  }
+});
+
+app.post('/auth/login', async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  if (!email || !password) return res.status(400).json({ error: 'invalid_credentials', message: 'Enter your email and password.' });
+  try {
+    const user = await getPasswordUser(email);
+    if (!user || !(await verifyPassword(password, user.password_hash))) {
+      return res.status(401).json({ error: 'invalid_credentials', message: 'Email or password is incorrect.' });
+    }
+    return res.json({ user: publicAccount(user) });
+  } catch (error) {
+    console.error('[server] Direct account login error:', error.message);
+    return res.status(503).json({ error: 'login_unavailable', message: 'Unable to sign in right now. Please try again.' });
+  }
+});
 
 app.post('/users/migrate', requireUser, async (req, res) => {
   try {

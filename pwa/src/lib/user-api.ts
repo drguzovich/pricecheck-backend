@@ -2,6 +2,17 @@ import { guestDataPayload } from "@/lib/guest-data";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_PRICE_API_URL ?? "https://pricecheck-backend-7tkh.onrender.com";
 
+export async function registerDirectAccount(input: { displayName: string; email: string; password: string }) {
+  const response = await fetch(`${API_BASE_URL}/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ displayName: input.displayName, email: input.email, password: input.password }),
+  });
+  const body = await response.json().catch(() => ({})) as { message?: string };
+  if (!response.ok) throw new Error(body.message || "Unable to create an account right now.");
+  return body;
+}
+
 export async function getAccountToken() {
   const response = await fetch("/api/account-token", { cache: "no-store" });
   if (!response.ok) return null;
