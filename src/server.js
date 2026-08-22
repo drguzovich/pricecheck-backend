@@ -29,6 +29,8 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const pwaDirectory = path.join(__dirname, '..', 'pwa');
 const servePwa = process.env.NODE_ENV === 'production' && fs.existsSync(pwaDirectory);
+const publicWebUrl = process.env.PRICECHECK_WEB_URL || 'https://pricecheck-backend-7tkh.onrender.com';
+if (!process.env.NEXTAUTH_URL) process.env.NEXTAUTH_URL = publicWebUrl;
 const nextApp = servePwa ? next({ dev: false, dir: pwaDirectory }) : null;
 let nextRequestHandler = null;
 
