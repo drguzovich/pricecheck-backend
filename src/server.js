@@ -36,7 +36,7 @@ let nextRequestHandler = null;
 
 Sentry.init({ dsn: process.env.SENTRY_DSN || undefined, environment: process.env.NODE_ENV || 'development', enabled: Boolean(process.env.SENTRY_DSN) });
 
-const configuredOrigins = String(process.env.ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean);
+const configuredOrigins = String(process.env.ALLOWED_ORIGINS || publicWebUrl).split(',').map((origin) => origin.trim()).filter(Boolean);
 const allowOrigin = (origin, callback) => {
   if (!origin || !configuredOrigins.length || configuredOrigins.includes(origin)) return callback(null, true);
   return callback(new Error('Origin is not allowed by PriceCheck API policy'));
