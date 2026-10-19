@@ -4,10 +4,20 @@ import GoogleProvider from "next-auth/providers/google";
 
 const googleClientId = process.env.GOOGLE_CLIENT_ID;
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
-const authSecret = process.env.NEXTAUTH_SECRET ?? process.env.USER_SYNC_JWT_SECRET;
-const apiBaseUrl = process.env.NEXT_PUBLIC_PRICE_API_URL ?? "https://pricecheck-backend-7tkh.onrender.com";
+const authSecret = process.env.NEXTAUTH_SECRET || process.env.USER_SYNC_JWT_SECRET;
+const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_PRICE_API_URL || "https://pricecheck-backend-7tkh.onrender.com";
+const publicAuthUrl = process.env.NEXTAUTH_URL || process.env.AUTH_URL || "";
+const localHttpAllowed = process.env.AUTH_TRUST_LOCAL_HTTP === "true" && /^http:\/\/(localhost|127\.0\.0\.1)(?::\d+)?(?:\/|$)/i.test(publicAuthUrl);
+const useSecureCookies = !localHttpAllowed;
+const cookieOptions = {
+  httpOnly: true,
+  sameSite: (useSecureCookies ? "none" : "lax") as "none" | "lax",
+  path: "/",
+  secure: useSecureCookies,
+};
 
 export const googleAuthEnabled = Boolean(googleClientId && googleClientSecret);
+export const authSessionEnabled = Boolean(authSecret);
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -38,6 +48,15 @@ export const authOptions: NextAuthOptions = {
   ],
   session: { strategy: "jwt" },
   secret: authSecret,
+  useSecureCookies,
+  cookies: {
+    sessionToken: { name: useSecureCookies ? "__Secure-next-auth.session-token" : "next-auth.session-token", options: cookieOptions },
+    callbackUrl: { name: useSecureCookies ? "__Secure-next-auth.callback-url" : "next-auth.callback-url", options: cookieOptions },
+    csrfToken: { name: useSecureCookies ? "__Host-next-auth.csrf-token" : "next-auth.csrf-token", options: cookieOptions },
+    pkceCodeVerifier: { name: useSecureCookies ? "__Secure-next-auth.pkce.code_verifier" : "next-auth.pkce.code_verifier", options: { ...cookieOptions, maxAge: 900 } },
+    state: { name: useSecureCookies ? "__Secure-next-auth.state" : "next-auth.state", options: { ...cookieOptions, maxAge: 900 } },
+    nonce: { name: useSecureCookies ? "__Secure-next-auth.nonce" : "next-auth.nonce", options: { ...cookieOptions, maxAge: 900 } },
+  },
   callbacks: {
     async jwt({ token, account, profile, user }) {
       if (account?.provider === "google") token.accountId = (profile as { sub?: string } | undefined)?.sub || account.providerAccountId;

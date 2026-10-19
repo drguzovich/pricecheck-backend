@@ -11,7 +11,11 @@ export function RecentSearches() {
     const sync = () => setSearches(readRecentSearches());
     sync();
     window.addEventListener("storage", sync);
-    return () => window.removeEventListener("storage", sync);
+    window.addEventListener("pricecheck-recent-searches", sync);
+    return () => {
+      window.removeEventListener("storage", sync);
+      window.removeEventListener("pricecheck-recent-searches", sync);
+    };
   }, []);
 
   if (!searches.length) {

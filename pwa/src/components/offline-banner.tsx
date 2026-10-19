@@ -11,5 +11,5 @@ export function OfflineBanner() {
     return () => { window.removeEventListener("online", update); window.removeEventListener("offline", update); };
   }, []);
   if (online) return null;
-  return <aside className="offline-banner" role="status">You are offline. Saved searches and your last loaded product pages remain available.</aside>;
+  return <aside className="offline-banner" role="status">You’re offline — showing cached prices</aside>;
 }

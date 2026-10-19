@@ -23,4 +23,5 @@ export function addRecentSearch(search: RecentSearch) {
   if (typeof window === "undefined") return;
   const next = [search, ...readRecentSearches().filter((item) => item.barcode !== search.barcode)].slice(0, LIMIT);
   window.localStorage.setItem(KEY, JSON.stringify(next));
+  window.dispatchEvent(new Event("pricecheck-recent-searches"));
 }

@@ -24,6 +24,13 @@ services:
         sync: false   # value is set manually in the Render dashboard — never committed
       - key: PARSE_API_KEY
         sync: false
+      # Empty protected placeholders: configure values in Render, never source.
+      - key: SCRAPER_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: ALERT_FROM_EMAIL
+        sync: false
       - key: USER_SYNC_JWT_SECRET
         sync: false
       - key: ADMIN_REFRESH_TOKEN
@@ -72,6 +79,12 @@ services:
       - key: SMTP_PASS
         sync: false
       - key: EMAIL_FROM
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: ALERT_FROM_EMAIL
+        sync: false
+      - key: SCRAPER_API_KEY
         sync: false
       - key: PRICECHECK_WEB_URL
         sync: false

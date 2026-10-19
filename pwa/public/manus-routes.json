@@ -1,0 +1,16 @@
+{
+  "routes": [
+    { "path": "/", "title": "PriceCheck" },
+    { "path": "/search", "title": "Search groceries" },
+    { "path": "/scan", "title": "Scan barcode" },
+    { "path": "/result", "title": "Price comparison" },
+    { "path": "/history", "title": "Scan history" },
+    { "path": "/favourites", "title": "Favourites" },
+    { "path": "/account", "title": "Account" },
+    { "path": "/alerts", "title": "Price alerts" },
+    { "path": "/offline", "title": "Offline" },
+    { "path": "/about", "title": "About PriceCheck" },
+    { "path": "/privacy", "title": "Privacy" },
+    { "path": "/terms", "title": "Terms" }
+  ]
+}

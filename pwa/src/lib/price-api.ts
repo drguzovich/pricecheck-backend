@@ -1,3 +1,5 @@
+import { backendRequest } from "@/lib/backend-api";
+
 export type RetailerResult = {
   retailer: string;
   available: boolean;
@@ -39,9 +41,6 @@ export type ProductRequestResponse = {
   error?: string;
 };
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_PRICE_API_URL ??
-  "https://pricecheck-backend-7tkh.onrender.com";
 const PRODUCT_CACHE_PREFIX = "pricecheck-result:";
 
 export function cacheComparison(comparison: ComparisonResponse) {
@@ -64,11 +63,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<{ response:
   // instead of aborting before the server can return its typed retailer result.
   const timeout = window.setTimeout(() => controller.abort(), 35_000);
   try {
-    const response = await fetch(`${API_BASE_URL}${path}`, {
-      ...init,
-      headers: { Accept: "application/json", ...init?.headers },
-      signal: controller.signal,
-    });
+    const response = await backendRequest(path, { ...init, signal: controller.signal });
     const body = (await response.json().catch(() => ({}))) as T;
     return { response, body };
   } finally {

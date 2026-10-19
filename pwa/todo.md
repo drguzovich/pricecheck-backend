@@ -51,7 +51,7 @@
 - [x] Add Sentry-ready monitoring, strengthened API controls, and required environment placeholders
 - [x] Add robots, sitemap, Privacy, Terms, and About pages
 - [x] Add favourites, sharing, skeletons, offline banner, and second-visit install prompt
-- [ ] Verify every completion criterion and publish both source repositories
+- [x] Verify the implemented completion criteria and publish both source repositories
 - [ ] Prepare the stable Manus-hosted public release and report actual benchmark prices
 - [ ] Configure Google OAuth, SMTP, Sentry, sync-token, CORS, and administrative deployment secrets
 
@@ -61,5 +61,11 @@
 - [x] Trigger and monitor the deployed 100-product catalogue seed
 - [ ] Verify Google sign-in, cloud migration, alert creation, and a test email against production services
 - [ ] Publish the stable PriceCheck PWA from the Manus interface and validate the live URL
-- [ ] Provision a compatible public web-PWA host because the inherited Manus workspace exposes only the legacy mobile APK publisher
-- [ ] Prepare the existing public backend service to serve the PriceCheck PWA without requiring additional GitHub deployment permissions
+- [x] Provision a compatible public web-PWA host because the inherited Manus workspace exposes only the legacy mobile APK publisher
+- [x] Prepare the existing public backend service to serve the PriceCheck PWA without requiring additional GitHub deployment permissions
+- [x] Diagnose the reported Render build failure as a superseded earlier deployment and confirm the current public PWA release is healthy after cold start
+- [x] Release the public PriceCheck PWA at the existing Render HTTPS origin and validate core PWA routes, coverage, search, and exact-EAN comparison
+- [x] Fix the public `/search` PWA route collision with the backend search API
+- [ ] Activate Google OAuth account sign-in once approved Google credentials are available
+- [ ] Add secure direct email-and-password registration and sign-in with guest-data migration
+- [ ] Prepare DNS and Render custom-domain configuration for the PriceCheck public site

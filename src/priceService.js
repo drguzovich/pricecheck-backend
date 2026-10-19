@@ -6,7 +6,7 @@
  * convert to cents before their local ranking and display logic.
  */
 
-const { sql, getProductRequest, recordProductRequestOutcome } = require('./db');
+const { sql, isDatabaseConfigured, getProductRequest, recordProductRequestOutcome } = require('./db');
 const woolworths = require('./scrapers/woolworths');
 const pickNPay = require('./scrapers/pnp');
 const checkers = require('./scrapers/checkers');
@@ -17,7 +17,7 @@ const CACHE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 // Managed retailer providers can take longer than direct product documents on
 // a cold request. Keep a finite service-wide budget while allowing those
 // providers enough time to return a verified exact match.
-const RETAILER_TIMEOUT_MS = Number(process.env.RETAILER_TIMEOUT_MS || 11000);
+const RETAILER_TIMEOUT_MS = Number(process.env.RETAILER_TIMEOUT_MS || 15000);
 const RETAILERS = [woolworths, pickNPay, checkers, spar];
 
 async function upsertProduct(data) {
@@ -122,6 +122,7 @@ function available(data, extra = {}) {
 }
 
 async function persistResult(result) {
+  if (!isDatabaseConfigured()) return;
   if (!result.price) return;
   await upsertProduct({
     barcode: result.barcode,
@@ -180,14 +181,17 @@ async function getRetailerPrice(adapter, barcode, { forceRefresh = false, cached
   return fresh;
 }
 
-async function getComparison(barcode, { forceRefresh = false } = {}) {
-  const cachedRows = forceRefresh ? [] : await getCachedComparisonRows(barcode);
+async function getComparison(barcode, { forceRefresh = false, adapters = RETAILERS, productMetadata = undefined } = {}) {
+  const cacheEnabled = isDatabaseConfigured();
+  const cachedRows = forceRefresh || !cacheEnabled ? [] : await getCachedComparisonRows(barcode);
   const cachedByRetailer = new Map(
     cachedRows.filter((row) => row.retailer).map((row) => [row.retailer, row])
   );
   const knownProduct = cachedRows[0] ?? null;
-  const metadataProduct = knownProduct ? null : await getProductMetadata(barcode);
-  const requestedProduct = knownProduct || metadataProduct ? null : await getProductRequest(barcode);
+  const metadataProduct = knownProduct ? null : productMetadata === undefined
+    ? await getProductMetadata(barcode)
+    : productMetadata;
+  const requestedProduct = cacheEnabled && !knownProduct && !metadataProduct ? await getProductRequest(barcode) : null;
   // A tester can add a label and pack size for a barcode that public metadata
   // does not know. Reuse that hint on the next lookup so retailer providers can
   // search by a meaningful product name while still requiring an exact EAN.
@@ -196,7 +200,7 @@ async function getComparison(barcode, { forceRefresh = false } = {}) {
     : null;
   const productHint = knownProduct ?? metadataProduct ?? requestHintProduct;
   const settled = await Promise.allSettled(
-    RETAILERS.map((adapter) =>
+    adapters.map((adapter) =>
       getRetailerPrice(adapter, barcode, {
         forceRefresh,
         cached: cachedByRetailer.get(adapter.RETAILER) ?? null,
@@ -207,7 +211,7 @@ async function getComparison(barcode, { forceRefresh = false } = {}) {
   const results = settled.map((outcome, index) =>
     outcome.status === 'fulfilled'
       ? outcome.value
-      : unavailable(RETAILERS[index].RETAILER, barcode, `${RETAILERS[index].RETAILER} lookup failed: ${outcome.reason?.message || 'unknown error'}`)
+      : unavailable(adapters[index].RETAILER, barcode, `${adapters[index].RETAILER} lookup failed: ${outcome.reason?.message || 'unknown error'}`)
   );
 
   const liveProduct = results.find((result) => result.available && result.name);
@@ -219,7 +223,7 @@ async function getComparison(barcode, { forceRefresh = false } = {}) {
     image_url: liveProduct?.image_url ?? productHint?.image_url ?? null,
   };
 
-  if (requestedProduct) {
+  if (requestedProduct && cacheEnabled) {
     recordProductRequestOutcome(barcode, results).catch((error) => {
       console.error(`[priceService] Unable to record product-request outcome for ${barcode}: ${error.message}`);
     });

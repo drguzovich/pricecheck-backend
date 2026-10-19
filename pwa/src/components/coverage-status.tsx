@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { backendRequest } from "@/lib/backend-api";
 
 type Coverage = {
   tracked_products: number;
@@ -9,23 +10,23 @@ type Coverage = {
   retailers: { retailer: string; product_count: number }[];
 };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_PRICE_API_URL ?? "https://pricecheck-backend-7tkh.onrender.com";
-
 export function CoverageStatus() {
   const [coverage, setCoverage] = useState<Coverage | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "unavailable">("loading");
 
   useEffect(() => {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 7000);
-    fetch(`${API_BASE_URL}/coverage`, { headers: { Accept: "application/json" }, signal: controller.signal })
+    backendRequest("/coverage", { signal: controller.signal })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("coverage unavailable")))
-      .then((data) => setCoverage(data as Coverage))
-      .catch(() => setCoverage(null))
+      .then((data) => { setCoverage(data as Coverage); setState("ready"); })
+      .catch(() => { setCoverage(null); setState("unavailable"); })
       .finally(() => window.clearTimeout(timeout));
     return () => { controller.abort(); window.clearTimeout(timeout); };
   }, []);
 
-  if (!coverage) return null;
+  if (state === "loading") return <section className="coverage-status skeleton-card" aria-busy="true" aria-label="Loading live coverage" />;
+  if (!coverage) return <section className="coverage-status" role="status"><p>Live coverage details are temporarily unavailable.</p></section>;
   const listedRetailers = coverage.retailers.length;
   return (
     <section className="coverage-status" aria-label="Live data coverage">

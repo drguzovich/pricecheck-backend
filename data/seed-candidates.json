@@ -30,10 +30,10 @@
     "evidence": "Loyalty Hub and Pick n Pay product listings confirm that the exact EAN barcode for PnP White Hot Dog Rolls 6 Pack is 6001007267551."
   },
   {
-    "barcode": "2009712000000",
-    "name": "PnP Live Well Bulk Lean Beef Mince",
-    "sourceUrl": "https://www.pnp.co.za/pnp-live-well-bulk-lean-beef-mince/p/000000000000251704_KGM",
-    "evidence": "The exact retail barcode (2009712000000) for PnP Live Well Bulk Lean Beef Mince was retrieved directly from the official Pick n Pay online product catalog."
+    "barcode": "6001042000403",
+    "name": "Huletts White Sugar 1kg",
+    "sourceUrl": "https://pnp-hybris-media-prod.s3.eu-west-1.amazonaws.com/media/2021/Smart+Shopper+Ts%26Cs/Hullets+barcodes.pdf",
+    "evidence": "Official Pick n Pay Huletts barcode PDF explicitly lists 1kg White Sugar as 6001042000403; read on 2026-10-19."
   },
   {
     "barcode": "5449000000439",
@@ -132,10 +132,10 @@
     "evidence": "Pick n Pay's official product catalog page for PnP Ground Beef 800g explicitly lists the verified barcode as 6009229349659."
   },
   {
-    "barcode": "2009729000000",
-    "name": "PnP Pork Braai Chops",
-    "sourceUrl": "https://www.pnphome.co.za/pnp-pork-braai-chops/p/000000000000260582_KGM",
-    "evidence": "The official Pick n Pay catalog page explicitly lists barcode 2009729000000 for PnP Pork Braai Chops."
+    "barcode": "4015400739098",
+    "name": "Pampers Baby Dry Size 3 Jumbo Pack 76 Nappies",
+    "sourceUrl": "https://www.pnp.co.za/pampers-baby-dry-size-3-jumbo-pack-76-nappies/p/000000000000680020_EA",
+    "evidence": "Official Pick n Pay product info explicitly displays Barcode 4015400739098 and exact pack name; read on 2026-10-19."
   },
   {
     "barcode": "6009229373838",
@@ -144,16 +144,16 @@
     "evidence": "Pick n Pay lists the exact product BT Bakery Queen Cakes 10 Pack with barcode 6009229373838."
   },
   {
-    "barcode": "2051442000000",
-    "name": "PnP Panini 4 Pack",
-    "sourceUrl": "https://www.pnp.co.za/pnp-panini-4-pack/p/000000000000622345_EA",
-    "evidence": "The official Pick n Pay product database lists the exact barcode for PnP Panini 4 Pack as 2051442000000."
+    "barcode": "7702018457229",
+    "name": "Gillette Blue 3 Disposable Razor Cool 3 Pack",
+    "sourceUrl": "https://www.pnp.co.za/gillette-blue-3-disposable-razor-cool-3-pack/p/000000000000772778_EA",
+    "evidence": "Official Pick n Pay product info explicitly displays Barcode 7702018457229 and exact pack name; read on 2026-10-19."
   },
   {
-    "barcode": "2005523000000",
-    "name": "PnP Dessert Topped Buns 6 Pack",
-    "sourceUrl": "https://www.pnp.co.za/pnp-dessert-topped-buns-6-pack/p/000000000000214534_EA",
-    "evidence": "The official Pick n Pay product page explicitly lists barcode 2005523000000 for the PnP Dessert Topped Buns 6 Pack."
+    "barcode": "6009645689735",
+    "name": "Huletts Icing Sugar 500g",
+    "sourceUrl": "https://pnp-hybris-media-prod.s3.eu-west-1.amazonaws.com/media/2021/Smart+Shopper+Ts%26Cs/Hullets+barcodes.pdf",
+    "evidence": "Official Pick n Pay Huletts barcode PDF explicitly lists Huletts Icing Sugar 500g as 6009645689735; read on 2026-10-19."
   },
   {
     "barcode": "6001336022685",
@@ -387,7 +387,7 @@
     "barcode": "6001068323005",
     "name": "Nescafe Ricoffy Instant Coffee 250g",
     "sourceUrl": "https://www.pnp.co.za/nescafe-ricoffy-coffee-250g/p/000000000000248541_EA",
-    "evidence": "Pick n Pay lists Nescafé Ricoffy Instant Coffee 250g with barcode 6001068323005."
+    "evidence": "Pick n Pay lists Nescaf\u00e9 Ricoffy Instant Coffee 250g with barcode 6001068323005."
   },
   {
     "barcode": "7613033677724",
@@ -417,7 +417,7 @@
     "barcode": "6009188002688",
     "name": "Nestle Cremora Creamer 750g",
     "sourceUrl": "https://www.woolworths.co.za/prod/_/A-6009188002688",
-    "evidence": "The official product listing for Nestlé Cremora Original Coffee and Tea Creamer 750g at major South African retailers confirms the EAN as 6009188002688."
+    "evidence": "The official product listing for Nestl\u00e9 Cremora Original Coffee and Tea Creamer 750g at major South African retailers confirms the EAN as 6009188002688."
   },
   {
     "barcode": "6001087359573",

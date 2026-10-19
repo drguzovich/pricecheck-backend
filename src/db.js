@@ -10,25 +10,41 @@
  * first boot against a fresh database.
  */
 
+const { createHash } = require('crypto');
 const postgres = require('postgres');
 
-if (!process.env.DATABASE_URL) {
-  throw new Error('[db] DATABASE_URL environment variable is not set. ' +
-    'Add it to your Render service environment variables.');
+const databaseUrl = String(process.env.DATABASE_URL || '').trim();
+const databaseConfigured = Boolean(databaseUrl);
+
+function databaseUnavailableError() {
+  const error = new Error('[db] DATABASE_URL environment variable is not configured.');
+  error.code = 'DATABASE_NOT_CONFIGURED';
+  return error;
 }
 
-const sql = postgres(process.env.DATABASE_URL, {
+// Keep the tagged-template interface available when the database is optional.
+// Route handlers can then return an honest service-unavailable response rather
+// than crashing during module import or process startup.
+function unavailableSql() { throw databaseUnavailableError(); }
+unavailableSql.begin = async () => { throw databaseUnavailableError(); };
+
+const sql = databaseConfigured ? postgres(databaseUrl, {
   ssl: 'require',
   max: 5,                // small pool — Neon free tier has connection limits
   idle_timeout: 20,      // release idle connections quickly (Neon auto-suspends)
   connect_timeout: 10,
-});
+}) : unavailableSql;
+
+function isDatabaseConfigured() {
+  return databaseConfigured;
+}
 
 /**
  * Create tables idempotently.  Called once at startup; awaited before the
  * HTTP server starts accepting requests.
  */
 async function initSchema() {
+  if (!databaseConfigured) throw databaseUnavailableError();
   await sql`
     CREATE TABLE IF NOT EXISTS products (
       barcode    TEXT PRIMARY KEY,
@@ -99,10 +115,20 @@ async function initSchema() {
       barcode      TEXT NOT NULL,
       product_name TEXT NOT NULL,
       last_price   NUMERIC,
-      scanned_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      scanned_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      migration_key TEXT
     )
   `;
+  // Existing scans intentionally retain a NULL migration key. This avoids
+  // rewriting or deleting established account history while making subsequent
+  // guest-sync imports idempotent.
+  await sql`ALTER TABLE scan_history ADD COLUMN IF NOT EXISTS migration_key TEXT`;
   await sql`CREATE INDEX IF NOT EXISTS idx_scan_history_user_date ON scan_history (user_id, scanned_at DESC)`;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_history_user_migration_key
+    ON scan_history (user_id, migration_key)
+    WHERE migration_key IS NOT NULL
+  `;
 
   await sql`
     CREATE TABLE IF NOT EXISTS favourites (
@@ -210,6 +236,7 @@ async function getCoverageStats() {
 }
 
 async function checkDatabase() {
+  if (!databaseConfigured) throw databaseUnavailableError();
   await sql`SELECT 1 AS connected`;
   return true;
 }
@@ -355,22 +382,63 @@ async function getUserSummary(userId) {
   };
 }
 
+function validGuestBarcode(value) {
+  return /^\d{8,14}$/.test(String(value || '').replace(/\D/g, ''));
+}
+
+function validGuestDate(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function migrationKey(scan) {
+  // Prefer a client-provided stable identifier where available. The canonical
+  // fallback makes the usual localStorage record idempotent across retries.
+  const sourceId = scan.clientId ?? scan.client_id ?? scan.id ?? '';
+  const canonical = [
+    sourceId,
+    String(scan.barcode || '').replace(/\D/g, ''),
+    String(scan.productName ?? scan.product_name ?? '').trim(),
+    Number.isFinite(Number(scan.lastPrice ?? scan.last_price)) ? Number(scan.lastPrice ?? scan.last_price) : '',
+    String(scan.scannedAt ?? scan.scanned_at ?? ''),
+  ].join('|');
+  return createHash('sha256').update(canonical).digest('hex');
+}
+
+function normaliseGuestScan(scan) {
+  const barcode = String(scan?.barcode || '').replace(/\D/g, '');
+  const productName = String(scan?.productName ?? scan?.product_name ?? '').trim();
+  const scannedAt = validGuestDate(scan?.scannedAt ?? scan?.scanned_at);
+  const priceValue = scan?.lastPrice ?? scan?.last_price;
+  const lastPrice = Number.isFinite(Number(priceValue)) && Number(priceValue) > 0 && Number(priceValue) <= 100000
+    ? Number(priceValue) : null;
+  if (!validGuestBarcode(barcode) || !productName || productName.length > 240 || !scannedAt) return null;
+  return { barcode, productName, lastPrice, scannedAt, migrationKey: migrationKey(scan) };
+}
+
+function normaliseGuestFavourite(favourite) {
+  const barcode = String(favourite?.barcode || '').replace(/\D/g, '');
+  const productName = String(favourite?.productName ?? favourite?.product_name ?? '').trim();
+  if (!validGuestBarcode(barcode) || !productName || productName.length > 240) return null;
+  return { barcode, productName };
+}
+
 async function migrateGuestData(userId, payload) {
-  const scans = Array.isArray(payload.scans) ? payload.scans.slice(0, 250) : [];
-  const favouritesToAdd = Array.isArray(payload.favourites) ? payload.favourites.slice(0, 250) : [];
+  const scans = (Array.isArray(payload?.scans) ? payload.scans : []).slice(0, 250).map(normaliseGuestScan).filter(Boolean);
+  const favouritesToAdd = (Array.isArray(payload?.favourites) ? payload.favourites : []).slice(0, 250).map(normaliseGuestFavourite).filter(Boolean);
   await sql.begin(async (transaction) => {
     for (const scan of scans) {
-      if (!scan?.barcode || !scan?.productName) continue;
       await transaction`
-        INSERT INTO scan_history (user_id, barcode, product_name, last_price, scanned_at)
-        VALUES (${userId}, ${String(scan.barcode)}, ${String(scan.productName).slice(0, 240)}, ${Number.isFinite(Number(scan.lastPrice)) ? Number(scan.lastPrice) : null}, ${scan.scannedAt ? new Date(scan.scannedAt) : new Date()})
+        INSERT INTO scan_history (user_id, barcode, product_name, last_price, scanned_at, migration_key)
+        VALUES (${userId}, ${scan.barcode}, ${scan.productName}, ${scan.lastPrice}, ${scan.scannedAt}, ${scan.migrationKey})
+        ON CONFLICT (user_id, migration_key) WHERE migration_key IS NOT NULL DO NOTHING
       `;
     }
     for (const favourite of favouritesToAdd) {
-      if (!favourite?.barcode || !favourite?.productName) continue;
       await transaction`
         INSERT INTO favourites (user_id, barcode, product_name)
-        VALUES (${userId}, ${String(favourite.barcode)}, ${String(favourite.productName).slice(0, 240)})
+        VALUES (${userId}, ${favourite.barcode}, ${favourite.productName})
         ON CONFLICT (user_id, barcode) DO UPDATE SET product_name = EXCLUDED.product_name
       `;
     }
@@ -379,7 +447,7 @@ async function migrateGuestData(userId, payload) {
 }
 
 module.exports = {
-  sql, initSchema, checkDatabase, recordProductRequest, getProductRequest, listProductRequests,
+  sql, initSchema, checkDatabase, isDatabaseConfigured, recordProductRequest, getProductRequest, listProductRequests,
   recordProductRequestOutcome, getCoverageStats, upsertUser, createPasswordUser, getPasswordUser, listScanHistory, recordScan,
   listFavourites, addFavourite, removeFavourite, listAlerts, createAlert, deactivateAlert,
   getActiveAlerts, recordAlertSent, getUserSummary, migrateGuestData,

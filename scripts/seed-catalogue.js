@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { initSchema, sql } = require('../src/db');
 const { forceRefreshComparison } = require('../src/priceService');
+const { validateSeedCandidates } = require('../src/catalogue');
 
 const candidates = require('../data/seed-candidates.json');
 const progressFile = path.join(__dirname, '..', 'data', 'seed-progress.json');
@@ -29,7 +30,7 @@ async function ensureProduct(candidate) {
 }
 
 async function runSeed({ delayMs = Math.max(3000, Number(process.env.SEED_DELAY_MS || 3000)), onProgress = null } = {}) {
-  if (candidates.length !== 100) throw new Error(`Seed catalogue must contain exactly 100 candidates, found ${candidates.length}.`);
+  validateSeedCandidates(candidates);
   await initSchema();
   const progress = readProgress();
   const completed = new Set(progress.completed || []);

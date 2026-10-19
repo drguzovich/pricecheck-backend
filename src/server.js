@@ -8,15 +8,17 @@ const helmet = require('helmet');
 const cron = require('node-cron');
 const Sentry = require('@sentry/node');
 const next = require('next');
-const { createRateLimiter } = require('./rateLimit');
+const { rateLimit } = require('express-rate-limit');
 
 const {
-  initSchema, checkDatabase, recordProductRequest, listProductRequests, getCoverageStats,
+  initSchema, checkDatabase, isDatabaseConfigured, recordProductRequest, listProductRequests, getCoverageStats,
   upsertUser, createPasswordUser, getPasswordUser, listScanHistory, recordScan, listFavourites, addFavourite, removeFavourite,
   listAlerts, createAlert, deactivateAlert, getUserSummary, migrateGuestData,
 } = require('./db');
 const { hashPassword, normalizeEmail, requireUser, validateRegistration, verifyPassword } = require('./userAuth');
-const { processPriceAlerts } = require('./alerts');
+const { alertDeliveryReadiness, processPriceAlerts } = require('./alerts');
+const { getProductHealth } = require('./productHealth');
+const { priceRequestKeyGenerator, signedProxyClient } = require('./rateLimit');
 const { runSeed } = require('../scripts/seed-catalogue');
 const {
   getComparison,
@@ -45,25 +47,21 @@ const allowOrigin = (origin, callback) => {
 // The PWA is served by Next.js from this same process. Next emits inline
 // bootstrap scripts, so its own response headers remain authoritative.
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({ origin: allowOrigin, methods: ['GET', 'POST', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-refresh-token'] }));
+app.use(cors({ origin: allowOrigin, methods: ['GET', 'POST', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-refresh-token', 'x-pricecheck-client', 'x-pricecheck-timestamp', 'x-pricecheck-signature'] }));
 app.use(express.json());
 
-const rateLimitWindowMs = Number(process.env.API_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000);
-const rateLimitMaxRequests = Number(process.env.API_RATE_LIMIT_MAX_REQUESTS || 30);
-const priceRequestLimiter = createRateLimiter({
-  windowMs: rateLimitWindowMs,
-  maxRequests: rateLimitMaxRequests,
+// Render supplies one reverse-proxy hop. Unsigned forwarded headers are never
+// read by the limiter; its direct fallback remains req.ip from this proxy setup.
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS || 1));
+const priceRequestLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: priceRequestKeyGenerator,
+  message: { error: 'rate_limited', message: 'Too many price requests. Please wait before trying again.' },
 });
-const authRequestLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 10 });
-const apiPrefix = (pathName) => ['/price', '/search', '/api/search', '/auth', '/product-requests', '/users', '/coverage', '/admin']
-  .some((prefix) => pathName === prefix || pathName.startsWith(`${prefix}/`));
-app.use((req, res, nextMiddleware) => {
-  // Application documents and Next assets must not consume the bounded API
-  // quota. Comparison and account paths retain their existing protection.
-  if (req.path === '/health' || !apiPrefix(req.path)) return nextMiddleware();
-  return priceRequestLimiter(req, res, nextMiddleware);
-});
-app.use('/auth', authRequestLimiter);
+app.use('/price', priceRequestLimiter);
 
 function validBarcode(barcode) {
   return /^\d{8,14}$/.test(barcode);
@@ -109,12 +107,33 @@ const startedAt = Date.now();
 let seedStatus = { state: 'idle', updatedAt: null, progress: null, error: null };
 
 app.get('/health', async (_req, res) => {
+  const base = {
+    uptime: Math.floor((Date.now() - startedAt) / 1000),
+    timestamp: new Date().toISOString(),
+    // Render supplies this deployment identifier; it is intentionally optional
+    // and non-secret so production deployment verification is possible.
+    revision: process.env.RENDER_GIT_COMMIT || process.env.RENDER_GIT_BRANCH || null,
+  };
+  if (!isDatabaseConfigured()) {
+    return res.status(503).json({ status: 'degraded', db: 'unconfigured', ...base });
+  }
   try {
     await checkDatabase();
-    res.json({ status: 'ok', db: 'connected', uptime: Math.floor((Date.now() - startedAt) / 1000), timestamp: new Date().toISOString() });
+    return res.json({ status: 'ok', db: 'connected', ...base });
   } catch (_error) {
-    res.status(503).json({ status: 'unavailable', db: 'disconnected', uptime: Math.floor((Date.now() - startedAt) / 1000) });
+    return res.status(503).json({ status: 'degraded', db: 'disconnected', ...base });
   }
+});
+
+app.get('/product/:barcode/health', async (req, res) => {
+  const { barcode } = req.params;
+  if (!validBarcode(barcode)) {
+    return res.status(400).json({ error: 'invalid_barcode', message: 'Barcode must be 8–14 digits' });
+  }
+  // A source miss or source outage deliberately stays a normal, dataAvailable:
+  // false response. Product-health data is optional and must never crash price
+  // comparison or be mistaken for an affirmative medical/allergy statement.
+  return res.json(await getProductHealth(barcode));
 });
 
 app.get('/coverage', async (_req, res) => {
@@ -341,7 +360,8 @@ app.route('/users/alerts')
     if (!validBarcode(barcode) || !validPrice(req.body?.target_price)) return res.status(400).json({ error: 'invalid_alert', message: 'A valid barcode and target price are required.' });
     try {
       const user = await upsertUser(req.user);
-      return res.status(201).json({ alert: await createAlert(user.id, { barcode, targetPrice: Number(req.body.target_price), email: user.email }) });
+      const alert = await createAlert(user.id, { barcode, targetPrice: Number(req.body.target_price), email: user.email });
+      return res.status(201).json({ alert, ...alertDeliveryReadiness() });
     } catch (_error) { return res.status(503).json({ error: 'alerts_unavailable', message: 'Unable to create price alert.' }); }
   })
   .delete(requireUser, async (req, res) => {
@@ -385,8 +405,18 @@ app.post('/admin/refresh-all', async (_req, res) => {
   return res.status(202).json({ message: `Refresh triggered for ${barcodes.length} barcode(s)`, barcodes });
 });
 
-cron.schedule('0 */6 * * *', async () => {
-  const barcodes = await getAllTrackedBarcodes();
+async function runScheduledTasks() {
+  if (!isDatabaseConfigured()) {
+    console.log('[cron] Skipped: DATABASE_URL is not configured');
+    return { skipped: 'database_not_configured' };
+  }
+  let barcodes;
+  try {
+    barcodes = await getAllTrackedBarcodes();
+  } catch (error) {
+    console.error(`[cron] Unable to read tracked barcodes: ${error.message}`);
+    return { skipped: 'database_unavailable' };
+  }
   for (const barcode of barcodes) {
     try { await forceRefreshComparison(barcode); }
     catch (error) { console.error(`[cron] Refresh failed for ${barcode}: ${error.message}`); }
@@ -398,6 +428,14 @@ cron.schedule('0 */6 * * *', async () => {
     Sentry.captureException(error);
     console.error(`[cron] Price alert processing failed: ${error.message}`);
   }
+  return { refreshed: barcodes.length };
+}
+
+cron.schedule('0 */6 * * *', () => {
+  runScheduledTasks().catch((error) => {
+    Sentry.captureException(error);
+    console.error(`[cron] Unhandled scheduled task failure: ${error.message}`);
+  });
 });
 
 if (nextApp) {
@@ -413,19 +451,40 @@ app.use((error, _req, res, _next) => {
   return res.status(500).json({ error: 'internal_error', message: 'PriceCheck encountered an unexpected error.' });
 });
 
-(async () => {
-  try {
+async function startServer({ port = PORT } = {}) {
+  if (isDatabaseConfigured()) {
+    try {
     await initSchema();
-    if (nextApp) {
+    } catch (error) {
+      // Keep health and unauthenticated comparison available in degraded mode;
+      // /health reports db: disconnected instead of terminating the process.
+      console.error('[server] Database schema initialisation failed:', error.message);
+    }
+  } else {
+    console.warn('[server] DATABASE_URL is not configured; starting in degraded mode');
+  }
+  if (nextApp) {
+    try {
       await nextApp.prepare();
       nextRequestHandler = nextApp.getRequestHandler();
       console.log('[server] PriceCheck PWA is ready on the same public origin as the comparison API');
+    } catch (error) {
+      console.error('[server] PWA initialisation failed; API remains available:', error.message);
     }
-    app.listen(PORT, () => console.log(`[server] PriceCheck backend listening on ${PORT}`));
-  } catch (error) {
-    console.error('[server] Failed to initialise database schema:', error);
-    process.exit(1);
   }
-})();
+  return app.listen(port, () => console.log(`[server] PriceCheck backend listening on ${port}`));
+}
+
+if (require.main === module) {
+  startServer().catch((error) => {
+    console.error('[server] Failed to start PriceCheck backend:', error);
+    process.exitCode = 1;
+  });
+}
 
 module.exports = app;
+module.exports.startServer = startServer;
+module.exports.runScheduledTasks = runScheduledTasks;
+module.exports.alertDeliveryReadiness = alertDeliveryReadiness;
+module.exports.priceRequestKeyGenerator = priceRequestKeyGenerator;
+module.exports.signedProxyClient = signedProxyClient;
