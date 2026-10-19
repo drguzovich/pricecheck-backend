@@ -23,7 +23,7 @@ Do not report completion until every item is checked off.
 - [x] Checkers returns clean `{ available: false }` if `SCRAPER_API_KEY` not set — never crashes
 - [x] `GET /price/:barcode` runs all 3 scrapers in parallel (`Promise.allSettled`, 15s timeout each)
 - [x] One scraper failure never blocks the others
-- [ ] Results cached in Neon Postgres — reuse if under 4 hours old
+- [x] Results cached in Neon Postgres — reuse if under 4 hours old
 - [ ] Test: barcode `6001069206154` returns real prices from Woolworths + Pick n Pay
 
 ---
@@ -71,7 +71,7 @@ Do not report completion until every item is checked off.
 - [x] `/favourites` page — empty state: "No favourites yet."
 - [x] `/favourites` page — "Set price alert" button per product
 - [x] Price alerts: "Alert me when price drops below R[input]" on `/result` page
-- [x] Price alert emails sent via `RESEND_API_KEY` env var (skip gracefully if not set)
+- [ ] Price alert emails sent via `RESEND_API_KEY` env var (skip gracefully if not set)
 - [x] Backend scheduled job (every 6h) checks prices vs active alerts and sends emails
 
 ---
@@ -119,7 +119,7 @@ Do not report completion until every item is checked off.
 - [x] Sentry added to frontend (read `NEXT_PUBLIC_SENTRY_DSN` env var, skip if missing)
 - [x] Sentry added to backend (read `SENTRY_DSN` env var, skip if missing)
 - [x] Rate limiting: `express-rate-limit`, max 30 req/min/IP on `/price/:barcode`
-- [ ] `GET /health` endpoint returns `{ status: "ok", db: "connected", uptime: X }`
+- [x] `GET /health` endpoint returns `{ status: "ok", db: "connected", uptime: X }`
 - [x] `public/robots.txt` added (allow all crawlers)
 - [ ] `sitemap.xml` added (home, search, scan pages)
 - [x] `/privacy` page — data collected, how used, how to delete, contact: drguzovich@gmail.com
@@ -177,11 +177,11 @@ Add all as empty-string placeholders in `render.yaml`. Real values set by user i
 
 ## Section 11 — Deploy
 
-- [ ] Backend changes pushed to https://github.com/drguzovich/pricecheck-backend
-- [ ] Render auto-deploy succeeds — `/health` returns `{ status: "ok" }`
-- [ ] Frontend changes pushed to https://github.com/drguzovich/pricecheck-app
-- [ ] Frontend deployed AND published via Manus built-in hosting
-- [ ] Stable public URL obtained
+- [x] Backend changes pushed to https://github.com/drguzovich/pricecheck-backend
+- [x] Render auto-deploy succeeds — `/health` returns `{ status: "ok" }`
+- [x] Frontend changes pushed to https://github.com/drguzovich/pricecheck-app
+- [x] Frontend deployed AND published via Manus built-in hosting
+- [x] Stable public URL obtained
 
 ---
 
@@ -189,28 +189,38 @@ Add all as empty-string placeholders in `render.yaml`. Real values set by user i
 
 Do not report done until every item below is confirmed:
 
-- [ ] 1. Public URL exists and loads on mobile browser
-- [ ] 2. Home page loads with search + scan CTAs and bottom nav
-- [ ] 3. Barcode `6001069206154` returns price results
+- [x] 1. Public URL exists and loads on mobile browser
+- [x] 2. Home page loads with search + scan CTAs and bottom nav
+- [x] 3. Barcode `6001069206154` returns price results
 - [ ] 4. Woolworths + Pick n Pay show real prices
-- [ ] 5. Checkers shows price OR clean "not available" — no crash
-- [ ] 6. SPAR shows grayed "Store prices vary — coming soon" card
-- [ ] 7. Product Health score shown on `/result` (Clean Score 1–10)
-- [ ] 8. Health score shows concern tags (e.g. "High sugar")
-- [ ] 9. If no ingredient data: grayed "No data available" section shown
-- [ ] 10. Rank badges show BOTH color AND text on every result
-- [ ] 11. Star/favourite button works (saves product)
-- [ ] 12. Share button works
-- [ ] 13. `/history` page works with empty state
-- [ ] 14. `/favourites` page works with empty state
-- [ ] 15. `/account` page shows Google Sign-In option
-- [ ] 16. `/privacy` page exists with real content
-- [ ] 17. `/terms` page exists with real content
-- [ ] 18. `/about` page exists with real content
-- [ ] 19. Bottom nav works on all pages
-- [ ] 20. Loading skeletons on all data-fetching pages — no blank screens
+- [x] 5. Checkers shows price OR clean "not available" — no crash
+- [x] 6. SPAR shows grayed "Store prices vary — coming soon" card
+- [x] 7. Product Health score shown on `/result` (Clean Score 1–10)
+- [x] 8. Health score shows concern tags (e.g. "High sugar")
+- [x] 9. If no ingredient data: grayed "No data available" section shown
+- [x] 10. Rank badges show BOTH color AND text on every result
+- [x] 11. Star/favourite button works (saves product)
+- [x] 12. Share button works
+- [x] 13. `/history` page works with empty state
+- [x] 14. `/favourites` page works with empty state
+- [x] 15. `/account` page shows Google Sign-In option
+- [x] 16. `/privacy` page exists with real content
+- [x] 17. `/terms` page exists with real content
+- [x] 18. `/about` page exists with real content
+- [x] 19. Bottom nav works on all pages
+- [x] 20. Loading skeletons on all data-fetching pages — no blank screens
 - [x] 21. Backend `/health` returns `{ status: "ok" }` — verified HTTP 200 on 2026-10-19
 - [ ] 22. Both repos pushed to GitHub with all changes
-- [ ] 23. Completion report includes: **live public URL**
-- [ ] 24. Completion report includes: **actual prices for barcode `6001069206154`**
+- [x] 23. Completion report includes: **live public URL**
+- [x] 24. Completion report includes: **actual prices for barcode `6001069206154`**
 - [ ] 25. Completion report includes: **Clean Score for barcode `6001069206154`**
+
+## Evidence and remaining gates — 19 October 2026
+
+Published frontend: https://pricecheck-7dykljea.manus.space, Manus publication confirmed for checkpoint03c7d54550e9906b16ba374fd65449d9cf98f7f9. Actual public 390px mobile browser checks passed (not mocked): all page routes, navigation, guest star/history/favourites/share, legal content and benchmark no-data UI. Render releasee21bbd699bc60d9815524a970cdf2d63f6b9b84f verified HTTP200 with statusok/dbconnected.
+
+Benchmark6001069206154: WoolworthsR24.95ZAR. PicknPay unavailable/timed out; direct source research found no exact-EAN listing and a different Chunky variant is deliberately not substituted. Checkers clean unavailable because SCRAPER_API_KEY is absent. SPAR has no store-specific price. OFF has no record for this benchmark; cleanScore is null/dataAvailablefalse. **Final items4 and25 remain open. No done/completed claim is authorized.**
+
+Final items7 and8 were genuinely validated with a different actual catalogue product (Coca-Cola2L5449000009067): score7/10OK, two additives, Nutri-ScoreE. This confirms the health feature, but is NOT a substitute for the benchmark score required byitem25. Complete-data scoring, partial/no-data behavior, colour+text badges, signed proxy identities, and failure isolation also passed regression tests.
+
+Google OAuth, authenticated cross-device migration/favourites and real email delivery remain unverified until Google/app shared signing/email credentials are configured. No keys were hardcoded; absent keys fail safely. A sourced100-item checksum-valid catalogue and direct3s seed command are supplied; rerunning live seeding requires authorised DB/admin execution access. Sitemap/public-origin configuration is being finalized using the confirmed hostname.

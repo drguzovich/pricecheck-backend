@@ -1,5 +1,5 @@
 export function publicSiteOrigin(): string | undefined {
-  const value = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXTAUTH_URL || process.env.PRICECHECK_WEB_URL;
+  const value = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXTAUTH_URL || process.env.PRICECHECK_WEB_URL || "https://pricecheck-7dykljea.manus.space";
   if (!value) return undefined;
   try {
     const url = new URL(value);
