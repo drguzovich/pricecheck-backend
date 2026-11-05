@@ -14,7 +14,9 @@
     "test:password-auth": "node scripts/test-password-auth.js",
     "test:gaps": "node scripts/test-backend-gaps.js",
     "verify:deployment": "node scripts/verify-deployment.js",
-    "alerts:run": "node scripts/run-alerts.js",
+    "alerts:run": "node scripts/run-watchlist.js",
+    "watchlist:run": "node scripts/run-watchlist.js",
+    "test:watchlist": "node --test tests/trolleywise-watchlist.test.js",
     "seed:build": "node scripts/build-seed-candidates.js",
     "seed:catalogue": "SEED_DELAY_MS=3000 node scripts/seed-catalogue.js",
     "seed": "SEED_DELAY_MS=3000 node src/scripts/seed-catalogue.js"

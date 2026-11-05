@@ -1,0 +1,53 @@
+.trolleywise-scanner { max-width: 46rem; }
+.trolleywise-scanner .scanner-copy > p { min-height: 3rem; }
+.scan-mode-control { display: flex; gap: 0.25rem; margin: 1rem 0; padding: 0.25rem; border: 1px solid var(--border, #363636); border-radius: 0.9rem; background: var(--surface, #1e1e1e); }
+.scan-mode-control > button { flex: 1; min-height: 44px; padding: 0.5rem; border: 1px solid transparent; border-radius: 0.7rem; background: transparent; color: var(--muted, #b0b0b0); font: inherit; font-size: 0.85rem; font-weight: 700; cursor: pointer; }
+.scan-mode-control > button[aria-pressed="true"] { color: #00e676; border-color: #326d51; background: #172b20; }
+.scan-mode-control > button:focus-visible, .scan-queue button:focus-visible, .scan-queue a:focus-visible, .scan-queue-select:focus-within { outline: 2px solid #00e676; outline-offset: 3px; }
+.trolleywise-scanner .button, .trolleywise-scanner input, .scan-queue .button { min-height: 44px; }
+.scan-queue { margin-top: 2rem; padding-top: 1.6rem; border-top: 1px solid var(--border, #363636); }
+.scan-queue-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.scan-queue-heading h2 { margin: 0.35rem 0 0; font-size: clamp(1.3rem, 3vw, 1.6rem); line-height: 1.15; letter-spacing: -0.025em; }
+.scan-queue-count { flex-shrink: 0; padding: 0.4rem 0.65rem; border: 1px solid var(--border, #363636); border-radius: 0.65rem; color: #c7d9cf; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.scan-queue-description { margin: 0.85rem 0; color: var(--muted, #b0b0b0); font-size: 0.8rem; line-height: 1.6; }
+.scan-queue-notice { margin: 1rem 0; padding: 0.75rem 0.9rem; border: 1px solid #326d51; border-radius: 0.8rem; background: #172b20; color: #d6f2e0; font-size: 0.85rem; line-height: 1.5; overflow-wrap: anywhere; }
+.scan-queue-toolbar { display: flex; flex-wrap: wrap; gap: 0.55rem; margin: 1rem 0; }
+.scan-queue-toolbar .button, .scan-queue-row-actions .button { padding: 0.55rem 0.8rem; font-size: 0.76rem; white-space: normal; text-align: center; }
+.scan-queue-list { display: grid; gap: 0.8rem; margin: 1rem 0; padding: 0; list-style: none; }
+.scan-queue-item { min-width: 0; padding: 1rem; border: 1px solid var(--border, #363636); border-radius: 1rem; background: var(--surface, #1e1e1e); }
+.scan-queue-product { display: flex; align-items: flex-start; gap: 0.65rem; }
+.scan-queue-product > div { min-width: 0; flex: 1; }
+.scan-queue-product h3 { margin: 0.2rem 0 0.3rem; font-size: 1rem; font-weight: 700; line-height: 1.35; letter-spacing: -0.012em; overflow-wrap: anywhere; }
+.scan-queue-product p { margin: 0; color: var(--muted, #b0b0b0); font-size: 0.74rem; line-height: 1.5; overflow-wrap: anywhere; }
+.scan-queue-select { display: flex; flex-shrink: 0; justify-content: center; align-items: center; width: 44px; min-height: 44px; margin: -0.15rem 0 0 -0.25rem; border-radius: 0.65rem; cursor: pointer; }
+.scan-queue-select input { width: 1.15rem; height: 1.15rem; min-height: 0; accent-color: #00e676; cursor: pointer; }
+.scan-queue-status { display: inline-flex; align-items: center; margin: 0.85rem 0 0.55rem; padding: 0.3rem 0.55rem; border: 1px solid #45564d; border-radius: 0.5rem; background: #25302a; color: #d5e1da; font-size: 0.72rem; line-height: 1.4; font-weight: 650; }
+.scan-queue-status.status-success { color: #96e9b5; border-color: #326d51; background: #172b20; }
+.scan-queue-status.status-error, .scan-queue-status.status-missing { color: #f2ce91; border-color: #735c37; background: #342a1b; }
+.scan-queue-status.status-loading, .scan-queue-status.status-queued { color: #bde4ec; border-color: #3a5c65; background: #203035; }
+.scan-queue-offer { display: grid; gap: 0.25rem; margin: 0.2rem 0 0.5rem; }
+.scan-queue-offer > strong { font-size: 1.5rem; line-height: 1.2; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.scan-queue-offer > span { color: #d4e3da; font-size: 0.8rem; }
+.scan-queue-offer small, .scan-queue-checked { color: var(--muted, #b0b0b0); font-size: 0.73rem; line-height: 1.55; }
+.scan-queue-row-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.85rem; }
+.scan-queue-error { color: #f5c590; font-size: 0.8rem; line-height: 1.55; overflow-wrap: anywhere; }
+.scan-queue-error p { margin: 0.6rem 0; }
+.scan-queue-save-note { margin-bottom: 0; color: #a6e7bd; font-size: 0.78rem; line-height: 1.5; }
+.scan-queue-empty { margin: 1rem 0; padding: 1.2rem; border: 1px dashed #486358; border-radius: 1rem; background: #17221c; }
+.scan-queue-empty strong { font-size: 0.9rem; }
+.scan-queue-empty p { margin-bottom: 0; color: var(--muted, #b0b0b0); font-size: 0.8rem; line-height: 1.6; }
+.scan-mode-control button { transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1); touch-action: manipulation; }
+.scan-mode-control button:active { transform: scale(0.98); }
+@media (max-width: 28rem) {
+  .scan-queue-item { padding: 0.85rem; }
+  .scan-queue-row-actions > .button { flex: 1 1 42%; }
+  .scan-queue-toolbar > .button { flex: 1 1 42%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scan-mode-control button, .scan-queue .button { transition: none; }
+  .scan-mode-control button:active, .scan-queue .button:active, .scan-queue .button:hover { transform: none; }
+}
+@media (prefers-contrast: more) {
+  .scan-queue-item, .scan-mode-control, .scan-queue-status, .scan-queue-notice { border-color: #a4a4a4; }
+  .scan-queue-description, .scan-queue-product p, .scan-queue-offer small, .scan-queue-checked { color: #d0d0d0; }
+}

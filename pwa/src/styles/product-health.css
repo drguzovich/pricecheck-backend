@@ -1,0 +1,56 @@
+.tw-health { overflow-wrap: anywhere; }
+.tw-health .health-heading { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.tw-health .health-retry { min-height: 2.75rem; font-size: 0.75rem; }
+.tw-health .health-source { display: flex; flex-direction: column; align-items: flex-start; gap: 0.3rem; margin-top: 0.85rem; color: #bbc8c2; font-size: 0.73rem; line-height: 1.5; }
+.tw-health .health-source a { color: #80e1bf; text-decoration: underline; text-underline-offset: 0.18em; }
+.tw-health .health-cached { display: inline-block; margin: 0.25rem 0 0; color: #d6e4de; }
+.tw-health .health-lookup-status p { margin: 0.8rem 0 0; color: #ddd6bb; font-size: 0.8rem; line-height: 1.6; }
+.tw-health .health-source-sections { display: grid; gap: 1.2rem; margin-top: 1.2rem; }
+.tw-health .health-ingredients, .tw-health .health-nutrition { min-width: 0; }
+.tw-health h3 { margin: 0 0 0.5rem; color: #f2f5f3; font-size: 1rem; font-weight: 750; letter-spacing: -0.02em; }
+.tw-health .health-ingredient-text { margin: 0; color: #d0dbd5; font-size: 0.84rem; line-height: 1.7; white-space: pre-line; }
+.tw-health .health-missing { color: #b6bdb9; font-size: 0.77rem; }
+.tw-health .health-nutrition-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.tw-health .health-nutrition-table caption { padding: 0 0 0.55rem; color: #f2f5f3; font-size: 1rem; font-weight: 750; letter-spacing: -0.02em; text-align: left; }
+.tw-health .health-nutrition-table th, .tw-health .health-nutrition-table td { padding: 0.58rem 0.45rem; border-bottom: 1px solid #3d4842; vertical-align: top; }
+.tw-health .health-nutrition-table thead th { color: #c1cdc7; font-size: 0.72rem; font-weight: 650; }
+.tw-health .health-nutrition-table th { text-align: left; font-weight: 600; }
+.tw-health .health-nutrition-table td, .tw-health .health-nutrition-table th:last-child { text-align: right; }
+.tw-health .health-nutrition-table td { color: #eef4f0; font-variant-numeric: tabular-nums; }
+.tw-health .health-calculated { display: block; margin-top: 0.2rem; color: #c7d1b6; font-size: 0.68rem; line-height: 1.4; }
+.tw-health .health-partial { color: #bbc5c0; font-size: 0.73rem; line-height: 1.6; }
+.tw-health .health-heuristic { margin-top: 1.3rem; padding-top: 1rem; border-top: 1px solid #3d4842; }
+.tw-health .health-summary { margin: 0 0 0.85rem; }
+.tw-health .health-score-missing { margin: 0 0 0.8rem; color: #d0dbd5; font-size: 0.82rem; line-height: 1.6; }
+.tw-health .health-score-missing span { display: block; font-size: 0.75rem; }
+.tw-health .health-explanations { margin: 0.9rem 0; padding-left: 1.15rem; color: #c7d2cc; font-size: 0.76rem; line-height: 1.6; }
+.tw-health .health-explanations li + li { margin-top: 0.4rem; }
+.tw-health .health-method, .tw-health .health-label-details { margin-top: 0.8rem; }
+.tw-health summary { min-height: 2.75rem; padding: 0.65rem 0; color: #ddede4; font-size: 0.81rem; font-weight: 700; cursor: pointer; }
+.tw-health .health-method p, .tw-health .health-label-input p { color: #c4cec8; font-size: 0.75rem; line-height: 1.65; }
+.tw-health .health-disclaimer { color: #c5cec8; font-size: 0.76rem; line-height: 1.65; }
+.health-loading > p { color: #c4cec8; font-size: 0.78rem; line-height: 1.5; }
+.tw-health .health-label-input { margin-top: 1.15rem; padding-top: 0.5rem; border-top: 1px solid #4e584b; }
+.tw-health .health-label-form { display: grid; gap: 0.9rem; margin-top: 0.8rem; }
+.tw-health .health-label-form label { display: grid; gap: 0.4rem; color: #dce5df; font-size: 0.77rem; font-weight: 650; }
+.tw-health .health-label-form input:not([type="checkbox"]), .tw-health .health-label-form textarea { width: 100%; min-height: 2.75rem; padding: 0.6rem; color: #f2f5f3; border: 1px solid #667369; border-radius: 0.55rem; background: #121712; font: inherit; }
+.tw-health .health-label-form textarea { resize: vertical; line-height: 1.6; }
+.tw-health .health-label-form small { color: #b9c6be; font-size: 0.71rem; font-weight: 400; line-height: 1.5; }
+.tw-health .health-label-form fieldset { min-width: 0; padding: 0.8rem; border: 1px solid #515b53; border-radius: 0.6rem; }
+.tw-health .health-label-form legend { padding: 0 0.3rem; color: #e8eee9; font-size: 0.8rem; font-weight: 700; }
+.tw-health .health-label-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem; }
+.tw-health .health-label-form .health-label-confirm { display: flex; align-items: flex-start; gap: 0.65rem; min-height: 2.75rem; font-weight: 400; line-height: 1.6; }
+.tw-health .health-label-confirm input { width: 1.2rem; height: 1.2rem; flex: 0 0 auto; margin-top: 0.15rem; accent-color: #00bfa5; }
+.tw-health .health-photo-preview { display: grid; justify-items: start; gap: 0.7rem; }
+.tw-health .health-photo-preview img { max-width: 100%; max-height: 24rem; object-fit: contain; border: 1px solid #667369; border-radius: 0.65rem; }
+.tw-health .health-user-record { padding: 0.9rem; border: 1px solid #807550; border-radius: 0.7rem; background: #242419; }
+.tw-health .health-user-record .health-user-source { color: #eee0a5; font-weight: 700; }
+.tw-health .health-user-nutrients { display: grid; gap: 0.45rem; font-size: 0.77rem; }
+.tw-health .health-user-nutrients > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem; }
+.tw-health .health-user-nutrients dd { margin: 0; color: #f0ebd8; font-variant-numeric: tabular-nums; }
+.tw-health .health-label-message { color: #e1dbc1; }
+.tw-health input:focus-visible, .tw-health textarea:focus-visible, .tw-health summary:focus-visible, .tw-health a:focus-visible, .tw-health button:focus-visible { outline: 2px solid #75e5b4; outline-offset: 3px; }
+@media (min-width: 45rem) { .tw-health .health-source-sections { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 1.5rem; } }
+@media (max-width: 24rem) { .tw-health .health-label-grid { grid-template-columns: 1fr; } .tw-health .health-retry { width: 100%; } }
+@media (prefers-reduced-motion: reduce) { .tw-health .button { transition: none; } .tw-health .button:active, .tw-health .button:hover { transform: none; } }
+@media (prefers-contrast: more) { .tw-health, .tw-health .health-user-record, .tw-health .health-label-form fieldset { border-color: #b9c8c0; } .tw-health .health-missing, .tw-health .health-partial, .tw-health .health-source { color: #e0e8e3; } }

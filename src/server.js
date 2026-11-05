@@ -5,7 +5,6 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const cron = require('node-cron');
 const Sentry = require('@sentry/node');
 const next = require('next');
 const { rateLimit } = require('express-rate-limit');
@@ -16,7 +15,9 @@ const {
   listAlerts, createAlert, deactivateAlert, getUserSummary, migrateGuestData,
 } = require('./db');
 const { hashPassword, normalizeEmail, requireUser, validateRegistration, verifyPassword } = require('./userAuth');
-const { alertDeliveryReadiness, processPriceAlerts } = require('./alerts');
+const { alertDeliveryReadiness } = require('./alerts');
+const { integrateAuthFlows, initAuthFlowsSchema } = require('./authFlows');
+const { integrateWatchlist, runWatchlistWorker, watchlistReadiness } = require('./watchlist');
 const { getProductHealth } = require('./productHealth');
 const { priceRequestKeyGenerator, signedProxyClient } = require('./rateLimit');
 const { runSeed } = require('../scripts/seed-catalogue');
@@ -31,7 +32,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const pwaDirectory = path.join(__dirname, '..', 'pwa');
 const servePwa = process.env.NODE_ENV === 'production' && fs.existsSync(pwaDirectory);
-const publicWebUrl = process.env.PRICECHECK_WEB_URL || 'https://pricecheck-backend-7tkh.onrender.com';
+const publicWebUrl = process.env.TROLLEYWISE_WEB_URL || process.env.PRICECHECK_WEB_URL || 'https://pricecheck-7dykljea.manus.space';
 if (!process.env.NEXTAUTH_URL) process.env.NEXTAUTH_URL = publicWebUrl;
 const nextApp = servePwa ? next({ dev: false, dir: pwaDirectory }) : null;
 let nextRequestHandler = null;
@@ -41,18 +42,27 @@ Sentry.init({ dsn: process.env.SENTRY_DSN || undefined, environment: process.env
 const configuredOrigins = String(process.env.ALLOWED_ORIGINS || publicWebUrl).split(',').map((origin) => origin.trim()).filter(Boolean);
 const allowOrigin = (origin, callback) => {
   if (!origin || !configuredOrigins.length || configuredOrigins.includes(origin)) return callback(null, true);
-  return callback(new Error('Origin is not allowed by PriceCheck API policy'));
+  return callback(new Error('Origin is not allowed by TrolleyWise API policy'));
 };
 
 // The PWA is served by Next.js from this same process. Next emits inline
 // bootstrap scripts, so its own response headers remain authoritative.
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: allowOrigin, methods: ['GET', 'POST', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-refresh-token', 'x-pricecheck-client', 'x-pricecheck-timestamp', 'x-pricecheck-signature'] }));
-app.use(express.json());
+const parseJson = express.json({ limit: '100kb' });
+app.use((req, res, nextMiddleware) => {
+  // Next-owned account/proxy requests need their original request body stream.
+  // The Express catalogue-seed endpoint is the only JSON-owning /api route.
+  if (req.path.startsWith('/api/') && req.path !== '/api/catalogue/seed') return nextMiddleware();
+  return parseJson(req, res, nextMiddleware);
+});
 
 // Render supplies one reverse-proxy hop. Unsigned forwarded headers are never
 // read by the limiter; its direct fallback remains req.ip from this proxy setup.
 app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS || 1));
+integrateAuthFlows(app);
+integrateWatchlist(app);
+app.use('/users', (_req, res, nextMiddleware) => { res.set('Cache-Control', 'private, no-store'); nextMiddleware(); });
 const priceRequestLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 30,
@@ -103,6 +113,8 @@ function woolworthsLegacy(comparison) {
   };
 }
 
+// A missing account still performs the same expensive password derivation.
+const dummyPasswordHash = hashPassword(require('crypto').randomBytes(32).toString('hex'));
 const startedAt = Date.now();
 let seedStatus = { state: 'idle', updatedAt: null, progress: null, error: null };
 
@@ -133,7 +145,7 @@ app.get('/product/:barcode/health', async (req, res) => {
   // A source miss or source outage deliberately stays a normal, dataAvailable:
   // false response. Product-health data is optional and must never crash price
   // comparison or be mistaken for an affirmative medical/allergy statement.
-  return res.json(await getProductHealth(barcode));
+  return res.json(await getProductHealth(barcode, { force: req.query.force === '1' }));
 });
 
 app.get('/coverage', async (_req, res) => {
@@ -257,6 +269,7 @@ function publicAccount(user) {
     accountId: user.account_id,
     email: user.email,
     displayName: user.display_name ?? null,
+    authVersion: Number(user.auth_version ?? 0),
   };
 }
 
@@ -269,8 +282,8 @@ app.post('/auth/register', async (req, res) => {
       displayName: validated.displayName,
       passwordHash: await hashPassword(req.body.password),
     });
-    if (created.duplicate) return res.status(409).json({ error: 'account_exists', message: 'An account already exists for this email. Sign in instead.' });
-    return res.status(201).json({ user: publicAccount(created.user) });
+    // Identical outcome prevents registration from exposing existing emails.
+    return res.status(202).json({ message: 'Request processed. Sign in with your email and password, or request a password reset.' });
   } catch (error) {
     console.error('[server] Direct account registration error:', error.message);
     return res.status(503).json({ error: 'registration_unavailable', message: 'Unable to create an account right now. Please try again.' });
@@ -280,10 +293,11 @@ app.post('/auth/register', async (req, res) => {
 app.post('/auth/login', async (req, res) => {
   const email = normalizeEmail(req.body?.email);
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
-  if (!email || !password) return res.status(400).json({ error: 'invalid_credentials', message: 'Enter your email and password.' });
+  if (!email || !password || password.length > 128) return res.status(400).json({ error: 'invalid_credentials', message: 'Enter your email and password.' });
   try {
     const user = await getPasswordUser(email);
-    if (!user || !(await verifyPassword(password, user.password_hash))) {
+    const matches = await verifyPassword(password, user?.password_hash || await dummyPasswordHash);
+    if (!user || !matches) {
       return res.status(401).json({ error: 'invalid_credentials', message: 'Email or password is incorrect.' });
     }
     return res.json({ user: publicAccount(user) });
@@ -361,7 +375,7 @@ app.route('/users/alerts')
     try {
       const user = await upsertUser(req.user);
       const alert = await createAlert(user.id, { barcode, targetPrice: Number(req.body.target_price), email: user.email });
-      return res.status(201).json({ alert, ...alertDeliveryReadiness() });
+      return res.status(201).json({ alert, ...alertDeliveryReadiness(), monitoring: await watchlistReadiness() });
     } catch (_error) { return res.status(503).json({ error: 'alerts_unavailable', message: 'Unable to create price alert.' }); }
   })
   .delete(requireUser, async (req, res) => {
@@ -405,38 +419,8 @@ app.post('/admin/refresh-all', async (_req, res) => {
   return res.status(202).json({ message: `Refresh triggered for ${barcodes.length} barcode(s)`, barcodes });
 });
 
-async function runScheduledTasks() {
-  if (!isDatabaseConfigured()) {
-    console.log('[cron] Skipped: DATABASE_URL is not configured');
-    return { skipped: 'database_not_configured' };
-  }
-  let barcodes;
-  try {
-    barcodes = await getAllTrackedBarcodes();
-  } catch (error) {
-    console.error(`[cron] Unable to read tracked barcodes: ${error.message}`);
-    return { skipped: 'database_unavailable' };
-  }
-  for (const barcode of barcodes) {
-    try { await forceRefreshComparison(barcode); }
-    catch (error) { console.error(`[cron] Refresh failed for ${barcode}: ${error.message}`); }
-  }
-  try {
-    const result = await processPriceAlerts();
-    console.log(`[cron] Price alerts processed: ${JSON.stringify(result)}`);
-  } catch (error) {
-    Sentry.captureException(error);
-    console.error(`[cron] Price alert processing failed: ${error.message}`);
-  }
-  return { refreshed: barcodes.length };
-}
-
-cron.schedule('0 */6 * * *', () => {
-  runScheduledTasks().catch((error) => {
-    Sentry.captureException(error);
-    console.error(`[cron] Unhandled scheduled task failure: ${error.message}`);
-  });
-});
+// The dedicated Render worker owns scheduling; web replicas never run cron.
+async function runScheduledTasks() { return runWatchlistWorker(); }
 
 if (nextApp) {
   app.use((req, res, nextMiddleware) => {
@@ -447,14 +431,15 @@ if (nextApp) {
 
 app.use((error, _req, res, _next) => {
   Sentry.captureException(error);
-  if (error.message?.includes('Origin is not allowed')) return res.status(403).json({ error: 'origin_not_allowed', message: 'This website is not authorised to call the PriceCheck API.' });
-  return res.status(500).json({ error: 'internal_error', message: 'PriceCheck encountered an unexpected error.' });
+  if (error.message?.includes('Origin is not allowed')) return res.status(403).json({ error: 'origin_not_allowed', message: 'This website is not authorised to call the TrolleyWise API.' });
+  return res.status(500).json({ error: 'internal_error', message: 'TrolleyWise encountered an unexpected error.' });
 });
 
 async function startServer({ port = PORT } = {}) {
   if (isDatabaseConfigured()) {
     try {
-    await initSchema();
+      await initSchema();
+      await initAuthFlowsSchema();
     } catch (error) {
       // Keep health and unauthenticated comparison available in degraded mode;
       // /health reports db: disconnected instead of terminating the process.
@@ -467,17 +452,17 @@ async function startServer({ port = PORT } = {}) {
     try {
       await nextApp.prepare();
       nextRequestHandler = nextApp.getRequestHandler();
-      console.log('[server] PriceCheck PWA is ready on the same public origin as the comparison API');
+      console.log('[server] TrolleyWise PWA is ready on the same public origin as the comparison API');
     } catch (error) {
       console.error('[server] PWA initialisation failed; API remains available:', error.message);
     }
   }
-  return app.listen(port, () => console.log(`[server] PriceCheck backend listening on ${port}`));
+  return app.listen(port, () => console.log(`[server] TrolleyWise backend listening on ${port}`));
 }
 
 if (require.main === module) {
   startServer().catch((error) => {
-    console.error('[server] Failed to start PriceCheck backend:', error);
+    console.error('[server] Failed to start TrolleyWise backend:', error);
     process.exitCode = 1;
   });
 }

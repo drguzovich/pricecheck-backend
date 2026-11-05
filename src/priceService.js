@@ -6,7 +6,8 @@
  * convert to cents before their local ranking and display logic.
  */
 
-const { sql, isDatabaseConfigured, getProductRequest, recordProductRequestOutcome } = require('./db');
+const { sql, isDatabaseConfigured, getProductRequest, recordProductRequestOutcome,
+  recordComparisonCheck, withDatabaseLock } = require('./db');
 const woolworths = require('./scrapers/woolworths');
 const pickNPay = require('./scrapers/pnp');
 const checkers = require('./scrapers/checkers');
@@ -17,8 +18,11 @@ const CACHE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 // Managed retailer providers can take longer than direct product documents on
 // a cold request. Keep a finite service-wide budget while allowing those
 // providers enough time to return a verified exact match.
-const RETAILER_TIMEOUT_MS = Number(process.env.RETAILER_TIMEOUT_MS || 15000);
+const configuredTimeout = Number(process.env.RETAILER_TIMEOUT_MS || 15000);
+const RETAILER_TIMEOUT_MS = Number.isFinite(configuredTimeout) ? Math.min(45000, Math.max(1000, configuredTimeout)) : 15000;
 const RETAILERS = [woolworths, pickNPay, checkers, spar];
+
+const refreshes = new Map();
 
 async function upsertProduct(data) {
   await sql`
@@ -65,18 +69,42 @@ async function getKnownProduct(barcode) {
 
 async function getCachedComparisonRows(barcode) {
   return sql`
-    SELECT p.barcode, p.name, p.brand, p.pack_size, p.image_url,
-           rp.retailer, rp.price, rp.price_str, rp.scraped_at, rp.url, rp.promo_flag
-    FROM products p
+    SELECT requested.barcode, p.name, p.brand, p.pack_size, p.image_url,
+           rp.retailer, rp.price, rp.price_str, rp.scraped_at, rp.url, rp.promo_flag,
+           wc.last_checked_at, wc.availability AS last_check_availability, wc.results AS last_check_results
+    FROM (SELECT ${barcode}::TEXT AS barcode) requested
+    LEFT JOIN products p ON p.barcode = requested.barcode
     LEFT JOIN (
       SELECT DISTINCT ON (retailer)
              retailer, product_id, price, price_str, scraped_at, url, promo_flag
       FROM retailer_prices
       WHERE product_id = ${barcode}
-      ORDER BY retailer, scraped_at DESC
-    ) rp ON rp.product_id = p.barcode
-    WHERE p.barcode = ${barcode}
+      ORDER BY retailer, scraped_at DESC, id DESC
+    ) rp ON rp.product_id = requested.barcode
+    LEFT JOIN watchlist_checks wc ON wc.barcode = requested.barcode
   `;
+}
+
+function cachedRetailerObservation(retailer, priceRow, latestCheck) {
+  const observation = Array.isArray(latestCheck?.last_check_results)
+    ? latestCheck.last_check_results.find((result) => result.retailer === retailer)
+    : null;
+  const failed = latestCheck?.last_check_availability === 'failed';
+  if (failed || observation?.available === false) {
+    // A cached negative carried through a mixed comparison is not a new check
+    // of this retailer. Preserve its original check time, just like price ages.
+    const checkedAt = !failed && observation.from_cache && observation.updated_at
+      ? observation.updated_at : latestCheck.last_checked_at;
+    const checkedMs = new Date(checkedAt).getTime();
+    const priceMs = priceRow ? new Date(priceRow.scraped_at).getTime() : NaN;
+    if (Number.isFinite(checkedMs) && checkedAt && (!Number.isFinite(priceMs) || checkedMs >= priceMs)) {
+      // History remains in retailer_prices, but is never returned as a current
+      // available offer after a newer unavailable/failed check.
+      return { available: false, updated_at: checkedAt,
+        error: failed ? 'Latest price check failed' : 'No price found in latest check' };
+    }
+  }
+  return priceRow ?? null;
 }
 
 function unavailable(retailer, barcode, error, extra = {}) {
@@ -152,7 +180,7 @@ async function boundedScrape(adapter, barcode, product = null) {
       }),
       timeout,
     ]);
-    if (!result.price) return unavailable(adapter.RETAILER, barcode, result.error || 'No price found');
+    if (!Number.isFinite(Number(result.price)) || Number(result.price) <= 0) return unavailable(adapter.RETAILER, barcode, result.error || 'No price found');
     await persistResult(result);
     return available(result);
   } catch (error) {
@@ -162,18 +190,21 @@ async function boundedScrape(adapter, barcode, product = null) {
   }
 }
 
+function cacheIsStale(cacheEntry) {
+  const updatedAt = cacheEntry.scraped_at ?? cacheEntry.updated_at;
+  const ageMs = Date.now() - new Date(updatedAt).getTime();
+  return !Number.isFinite(ageMs) || ageMs >= CACHE_MAX_AGE_MS;
+}
+
 async function getRetailerPrice(adapter, barcode, { forceRefresh = false, cached = null, product = null } = {}) {
   const cacheEntry = forceRefresh ? null : cached;
   if (cacheEntry) {
-    const ageMs = Date.now() - new Date(cacheEntry.scraped_at).getTime();
-    if (ageMs < CACHE_MAX_AGE_MS) return available(cacheEntry, { from_cache: true });
-
-    // Never make a customer wait on a known, stale result. Start a bounded
-    // refresh in the background and keep the age visible to the caller.
-    boundedScrape(adapter, barcode, product).catch((error) => {
-      console.error(`[priceService] Background refresh failed for ${adapter.RETAILER}/${barcode}: ${error.message}`);
-    });
-    return available(cacheEntry, { from_cache: true, stale: true });
+    const updatedAt = cacheEntry.scraped_at ?? cacheEntry.updated_at;
+    const extra = { from_cache: true, stale: cacheIsStale(cacheEntry) };
+    if (cacheEntry.available === false) {
+      return unavailable(adapter.RETAILER, barcode, cacheEntry.error, { ...extra, updated_at: updatedAt });
+    }
+    return available(cacheEntry, extra);
   }
 
   const fresh = await boundedScrape(adapter, barcode, product);
@@ -181,14 +212,15 @@ async function getRetailerPrice(adapter, barcode, { forceRefresh = false, cached
   return fresh;
 }
 
-async function getComparison(barcode, { forceRefresh = false, adapters = RETAILERS, productMetadata = undefined } = {}) {
+async function getComparison(barcode, { forceRefresh = false, adapters = RETAILERS, productMetadata = undefined, productHint: suppliedHint = null } = {}) {
   const cacheEnabled = isDatabaseConfigured();
   const cachedRows = forceRefresh || !cacheEnabled ? [] : await getCachedComparisonRows(barcode);
   const cachedByRetailer = new Map(
     cachedRows.filter((row) => row.retailer).map((row) => [row.retailer, row])
   );
-  const knownProduct = cachedRows[0] ?? null;
-  const metadataProduct = knownProduct ? null : productMetadata === undefined
+  const knownProduct = cachedRows.find((row) => row.name) ?? (cacheEnabled ? await getKnownProduct(barcode) : null);
+  const namedHint = suppliedHint?.name ? { ...suppliedHint, barcode } : null;
+  const metadataProduct = knownProduct || namedHint ? null : productMetadata === undefined
     ? await getProductMetadata(barcode)
     : productMetadata;
   const requestedProduct = cacheEnabled && !knownProduct && !metadataProduct ? await getProductRequest(barcode) : null;
@@ -198,21 +230,57 @@ async function getComparison(barcode, { forceRefresh = false, adapters = RETAILE
   const requestHintProduct = requestedProduct?.product_hint
     ? { barcode, name: requestedProduct.product_hint, brand: null, pack_size: null, image_url: null }
     : null;
-  const productHint = knownProduct ?? metadataProduct ?? requestHintProduct;
+  const productHint = knownProduct ?? metadataProduct ?? namedHint ?? requestHintProduct;
+  const cachedObservations = new Map(adapters.map((adapter) => [adapter.RETAILER,
+    cachedRetailerObservation(adapter.RETAILER, cachedByRetailer.get(adapter.RETAILER), cachedRows[0])]));
+  const hasCacheMiss = adapters.some((adapter) => !cachedObservations.get(adapter.RETAILER));
+  const hasStaleCache = [...cachedObservations.values()].some((entry) => entry && cacheIsStale(entry));
+  // Cache misses and stale background work share the same barcode coordinator
+  // as worker/manual refreshes. The forced inner comparison performs the actual
+  // bounded retailer calls; it does not recursively read or refresh this cache.
+  let refresh;
+  const refreshComparison = () => {
+    if (!refresh) refresh = forceRefreshComparison(barcode, {
+      adapters, productMetadata: null,
+      productHint: productHint ? { barcode, name: productHint.name,
+        brand: productHint.brand ?? null, pack_size: productHint.pack_size ?? null,
+        image_url: productHint.image_url ?? null } : null,
+    });
+    return refresh;
+  };
   const settled = await Promise.allSettled(
-    adapters.map((adapter) =>
-      getRetailerPrice(adapter, barcode, {
-        forceRefresh,
-        cached: cachedByRetailer.get(adapter.RETAILER) ?? null,
-        product: productHint,
-      })
-    )
+    adapters.map(async (adapter) => {
+      const cached = cachedObservations.get(adapter.RETAILER);
+      if (!forceRefresh && hasStaleCache && !cached) {
+        // No observation exists for this retailer. Do not invent an offer or
+        // hold the stale response while the shared background refresh runs.
+        return unavailable(adapter.RETAILER, barcode, 'Price refresh in progress');
+      }
+      if (!forceRefresh && hasCacheMiss && !hasStaleCache) {
+        // A foreground refresh may supersede even a previously fresh cached
+        // offer. Return its coherent results, not a pre-refresh cache mixture.
+        const freshComparison = await refreshComparison();
+        return freshComparison.results.find((result) => result.retailer === adapter.RETAILER)
+          ?? unavailable(adapter.RETAILER, barcode, 'Retailer was not included in the active refresh');
+      }
+      return getRetailerPrice(adapter, barcode, { forceRefresh, cached, product: productHint });
+    })
   );
   const results = settled.map((outcome, index) =>
     outcome.status === 'fulfilled'
       ? outcome.value
       : unavailable(adapters[index].RETAILER, barcode, `${adapters[index].RETAILER} lookup failed: ${outcome.reason?.message || 'unknown error'}`)
   );
+
+  if (!forceRefresh && results.some((result) => result.from_cache && result.stale)) {
+    // Return explicitly stale facts immediately; at most one whole-barcode
+    // background refresh may scrape, under the shared advisory lock.
+    refreshComparison().catch((error) => {
+      if (error.code !== 'REFRESH_IN_PROGRESS') {
+        console.error(`[priceService] Background refresh failed for ${barcode}: ${error.message}`);
+      }
+    });
+  }
 
   const liveProduct = results.find((result) => result.available && result.name);
   const product = {
@@ -223,13 +291,19 @@ async function getComparison(barcode, { forceRefresh = false, adapters = RETAILE
     image_url: liveProduct?.image_url ?? productHint?.image_url ?? null,
   };
 
-  if (requestedProduct && cacheEnabled) {
+  if (requestedProduct && cacheEnabled && forceRefresh) {
     recordProductRequestOutcome(barcode, results).catch((error) => {
       console.error(`[priceService] Unable to record product-request outcome for ${barcode}: ${error.message}`);
     });
   }
 
-  return { barcode, product, results };
+  const comparison = { barcode, product, results };
+  // Reading cached prices is not a new provider check. Source timestamps retain
+  // their original age; the coordinated forced lookup records its own check.
+  if (cacheEnabled && forceRefresh) {
+    await recordComparisonCheck(barcode, comparison);
+  }
+  return comparison;
 }
 
 /** Legacy Expo compatibility: return the top-level Woolworths shape when available. */
@@ -251,7 +325,7 @@ async function getPrice(barcode) {
 }
 
 async function forceRefresh(barcode) {
-  const comparison = await getComparison(barcode, { forceRefresh: true });
+  const comparison = await forceRefreshComparison(barcode);
   const woolworthsResult = comparison.results.find((result) => result.retailer === woolworths.RETAILER);
   if (!woolworthsResult?.available) return { price: null, error: woolworthsResult?.error || 'Woolworths unavailable' };
   return {
@@ -265,8 +339,21 @@ async function forceRefresh(barcode) {
   };
 }
 
-async function forceRefreshComparison(barcode) {
-  return getComparison(barcode, { forceRefresh: true });
+function forceRefreshComparison(barcode, options = {}) {
+  if (refreshes.has(barcode)) return refreshes.get(barcode);
+  const operation = (async () => {
+    if (!isDatabaseConfigured()) return getComparison(barcode, { ...options, forceRefresh: true });
+    const locked = await withDatabaseLock(71002, barcode, () => getComparison(barcode, { ...options, forceRefresh: true }));
+    if (!locked.acquired) {
+      const error = new Error('This product is already being refreshed. Please try again shortly.');
+      error.code = 'REFRESH_IN_PROGRESS';
+      throw error;
+    }
+    return locked.result;
+  })();
+  const promise = operation.finally(() => { refreshes.delete(barcode); });
+  refreshes.set(barcode, promise);
+  return promise;
 }
 
 async function searchProducts(query) {
@@ -287,6 +374,12 @@ async function getAllTrackedBarcodes() {
       SELECT DISTINCT product_id AS barcode FROM retailer_prices
       UNION
       SELECT barcode FROM product_requests
+      UNION
+      SELECT barcode FROM favourites
+      UNION
+      SELECT barcode FROM price_alerts WHERE active = TRUE
+      UNION
+      SELECT barcode FROM products
     ) AS tracked_barcodes
   `;
   return rows.map((row) => row.barcode);

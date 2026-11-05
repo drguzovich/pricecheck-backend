@@ -238,7 +238,7 @@ async function scrapeByBarcode(barcode, { timeoutMs = 15000 } = {}) {
   let browser;
   try {
     const documentResult = await fetchDocumentProduct(url, barcode, Math.max(1000, Math.floor(timeoutMs * 0.45)));
-    if (documentResult.notFound) return unavailable(barcode, url, scraped_at, 'HTTP 404 — product not found');
+    if (documentResult.notFound) return unavailable(barcode, url, scraped_at, 'HTTP 404  -  product not found');
     if (documentResult.product) return successfulResult(barcode, url, scraped_at, documentResult.product);
 
     // The fallback is deliberately reachable: server-rendered documents may omit
@@ -248,7 +248,7 @@ async function scrapeByBarcode(barcode, { timeoutMs = 15000 } = {}) {
     const page = await context.newPage();
     await page.route('**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,ttf,otf,ico}', (route) => route.abort());
     const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: Math.max(1000, Math.floor(timeoutMs * 0.55)) });
-    if (!response || response.status() === 404) return unavailable(barcode, url, scraped_at, `HTTP ${response ? response.status() : 'no response'} — product not found`);
+    if (!response || response.status() === 404) return unavailable(barcode, url, scraped_at, `HTTP ${response ? response.status() : 'no response'}  -  product not found`);
 
     const product = await extractFromPageState(page, barcode) || await extractFromJsonLd(page, barcode);
     if (!product) return unavailable(barcode, url, scraped_at, 'No matching product-id-scoped Woolworths price was found');

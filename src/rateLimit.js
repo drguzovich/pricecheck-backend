@@ -17,7 +17,7 @@ function singleHeader(req, name) {
 function signedProxyClient(req, now = Date.now()) {
   // The trusted frontend proxy and backend must share USER_SYNC_JWT_SECRET (or
   // NEXTAUTH_SECRET). Without a matching secret, direct-IP bucketing remains.
-  const secret = process.env.USER_SYNC_JWT_SECRET || process.env.NEXTAUTH_SECRET;
+  const secret = process.env.USER_SYNC_JWT_SECRET;
   const client = singleHeader(req, 'x-pricecheck-client');
   const timestamp = singleHeader(req, 'x-pricecheck-timestamp');
   const signature = singleHeader(req, 'x-pricecheck-signature');

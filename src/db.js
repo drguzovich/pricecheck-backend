@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Database layer — Neon (serverless Postgres) via postgres.js
+ * Database layer  -  Neon (serverless Postgres) via postgres.js
  *
  * Connection is driven entirely by the DATABASE_URL environment variable,
  * which must be set in the Render service's environment (never committed).
@@ -30,9 +30,13 @@ unavailableSql.begin = async () => { throw databaseUnavailableError(); };
 
 const sql = databaseConfigured ? postgres(databaseUrl, {
   ssl: 'require',
-  max: 5,                // small pool — Neon free tier has connection limits
+  max: 3,                // data pool plus two lock connections stays at five
   idle_timeout: 20,      // release idle connections quickly (Neon auto-suspends)
   connect_timeout: 10,
+}) : unavailableSql;
+
+const lockSql = databaseConfigured ? postgres(databaseUrl, {
+  ssl: 'require', max: 2, idle_timeout: 20, connect_timeout: 10,
 }) : unavailableSql;
 
 function isDatabaseConfigured() {
@@ -157,6 +161,51 @@ async function initSchema() {
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_price_alerts_active ON price_alerts (active, barcode)`;
 
+  // Legacy duplicate rows remain intact. Only the canonical row selected by
+  // createAlert receives a key, so this additive index is safe on existing data.
+  await sql`ALTER TABLE price_alerts ADD COLUMN IF NOT EXISTS dedupe_key TEXT`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_price_alerts_canonical
+    ON price_alerts (user_id, barcode) WHERE dedupe_key IS NOT NULL`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_price_alerts_user_barcode ON price_alerts (user_id, barcode, id DESC)`;
+  await sql`CREATE TABLE IF NOT EXISTS watchlist_checks (
+    barcode TEXT PRIMARY KEY,
+    last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_available_at TIMESTAMPTZ,
+    availability TEXT NOT NULL CHECK (availability IN ('available', 'unavailable', 'failed')),
+    results JSONB NOT NULL DEFAULT '[]'::JSONB
+  )`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_watchlist_checks_rotation ON watchlist_checks (last_checked_at, barcode)`;
+  await sql`CREATE TABLE IF NOT EXISTS watchlist_observations (
+    id BIGSERIAL PRIMARY KEY,
+    barcode TEXT NOT NULL,
+    checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    availability TEXT NOT NULL,
+    best_price NUMERIC,
+    retailer TEXT,
+    source_updated_at TIMESTAMPTZ,
+    source_url TEXT
+  )`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_watchlist_observations_trend ON watchlist_observations (barcode, checked_at DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_retailer_prices_barcode_date ON retailer_prices (product_id, scraped_at DESC)`;
+  await sql`CREATE TABLE IF NOT EXISTS watchlist_runs (
+    id UUID PRIMARY KEY,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ,
+    state TEXT NOT NULL DEFAULT 'running',
+    metrics JSONB NOT NULL DEFAULT '{}'::JSONB
+  )`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_watchlist_runs_date ON watchlist_runs (started_at DESC)`;
+  await sql`CREATE TABLE IF NOT EXISTS alert_delivery_claims (
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    barcode TEXT NOT NULL,
+    price NUMERIC NOT NULL,
+    claim_token UUID NOT NULL,
+    attempted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    sent_at TIMESTAMPTZ,
+    state TEXT NOT NULL DEFAULT 'claimed',
+    PRIMARY KEY (user_id, barcode)
+  )`;
+
   console.log('[db] Schema ready (Neon Postgres)');
 }
 
@@ -263,15 +312,16 @@ async function createPasswordUser({ email, displayName, passwordHash }) {
   const [user] = await sql`
     INSERT INTO users (google_id, email, display_name, password_hash, auth_provider)
     VALUES (${accountId}, ${email}, ${displayName}, ${passwordHash}, 'password')
+    ON CONFLICT (google_id) DO NOTHING
     RETURNING id, google_id AS account_id, email, display_name, created_at
   `;
-  return { duplicate: false, user };
+  return { duplicate: !user, user: user || null };
 }
 
 async function getPasswordUser(email) {
   const accountId = `password:${email}`;
   const [user] = await sql`
-    SELECT id, google_id AS account_id, email, display_name, password_hash
+    SELECT id, google_id AS account_id, email, display_name, password_hash, auth_version
     FROM users
     WHERE google_id = ${accountId} AND auth_provider = 'password'
     LIMIT 1
@@ -327,34 +377,59 @@ async function removeFavourite(userId, barcode) {
 
 async function listAlerts(userId) {
   return sql`
-    SELECT id, barcode, target_price, email, active, last_sent_at, last_sent_price, created_at
-    FROM price_alerts WHERE user_id = ${userId} ORDER BY active DESC, created_at DESC
+    SELECT DISTINCT ON (a.barcode) a.id, a.barcode, a.target_price, a.email,
+      a.active, a.last_sent_at, a.last_sent_price, a.created_at,
+      COALESCE(p.name, f.product_name) AS product_name
+    FROM price_alerts a
+    LEFT JOIN products p ON p.barcode = a.barcode
+    LEFT JOIN favourites f ON f.user_id = a.user_id AND f.barcode = a.barcode
+    WHERE a.user_id = ${userId} AND a.active = TRUE
+    ORDER BY a.barcode, (a.dedupe_key IS NOT NULL) DESC, a.id DESC
   `;
 }
 
 async function createAlert(userId, alert) {
-  const [entry] = await sql`
-    INSERT INTO price_alerts (user_id, barcode, target_price, email)
-    VALUES (${userId}, ${alert.barcode}, ${alert.targetPrice}, ${alert.email})
-    RETURNING id, barcode, target_price, email, active, created_at
-  `;
-  return entry;
+  return sql.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${`alert:${userId}:${alert.barcode}`}))`;
+    const [existing] = await tx`SELECT id FROM price_alerts
+      WHERE user_id = ${userId} AND barcode = ${alert.barcode}
+      ORDER BY (dedupe_key IS NOT NULL) DESC, id DESC LIMIT 1 FOR UPDATE`;
+    const rows = existing
+      ? await tx`UPDATE price_alerts SET target_price = ${alert.targetPrice}, email = ${alert.email},
+          active = TRUE, dedupe_key = 'canonical' WHERE id = ${existing.id}
+          RETURNING id, barcode, target_price, email, active, created_at`
+      : await tx`INSERT INTO price_alerts (user_id, barcode, target_price, email, dedupe_key)
+          VALUES (${userId}, ${alert.barcode}, ${alert.targetPrice}, ${alert.email}, 'canonical')
+          ON CONFLICT (user_id, barcode) WHERE dedupe_key IS NOT NULL
+          DO UPDATE SET target_price = EXCLUDED.target_price, email = EXCLUDED.email, active = TRUE
+          RETURNING id, barcode, target_price, email, active, created_at`;
+    return rows[0];
+  });
 }
 
 async function deactivateAlert(userId, alertId) {
+  // Disable legacy duplicates as well so removing a displayed canonical alert
+  // cannot unexpectedly reveal another active alert for the same product.
   const rows = await sql`
-    UPDATE price_alerts SET active = FALSE WHERE id = ${alertId} AND user_id = ${userId} RETURNING id
+    UPDATE price_alerts SET active = FALSE WHERE user_id = ${userId}
+      AND barcode = (SELECT barcode FROM price_alerts WHERE id = ${alertId} AND user_id = ${userId})
+    RETURNING id
   `;
   return rows.length > 0;
 }
 
-async function getActiveAlerts() {
+async function getActiveAlerts({ afterId = 0, limit = 250, barcodes = null } = {}) {
+  const pageSize = Math.min(1000, Math.max(1, Number(limit) || 250));
   return sql`
-    SELECT id, barcode, target_price, email, last_sent_at, last_sent_price
-    FROM price_alerts
-    WHERE active = TRUE
-    ORDER BY created_at ASC
-    LIMIT 500
+    WITH canonical AS (
+      SELECT DISTINCT ON (user_id, barcode) id, user_id, barcode, target_price, email,
+        active, last_sent_at, last_sent_price
+      FROM price_alerts WHERE active = TRUE
+      ORDER BY user_id, barcode, (dedupe_key IS NOT NULL) DESC, id DESC
+    )
+    SELECT * FROM canonical WHERE id > ${afterId}
+      ${barcodes ? sql`AND barcode IN ${sql(barcodes)}` : sql``}
+    ORDER BY id ASC LIMIT ${pageSize}
   `;
 }
 
@@ -373,7 +448,7 @@ async function getUserSummary(userId) {
     SELECT
       (SELECT COUNT(*) FROM scan_history WHERE user_id = ${userId}) AS scan_count,
       (SELECT COUNT(*) FROM favourites WHERE user_id = ${userId}) AS favourites_count,
-      (SELECT COUNT(*) FROM price_alerts WHERE user_id = ${userId} AND active = TRUE) AS alerts_count
+      (SELECT COUNT(DISTINCT barcode) FROM price_alerts WHERE user_id = ${userId} AND active = TRUE) AS alerts_count
   `;
   return {
     scanCount: Number(summary?.scan_count ?? 0),
@@ -452,3 +527,192 @@ module.exports = {
   listFavourites, addFavourite, removeFavourite, listAlerts, createAlert, deactivateAlert,
   getActiveAlerts, recordAlertSent, getUserSummary, migrateGuestData,
 };
+
+/** Transaction advisory locks work with Neon's transaction pooler and release
+ * automatically on rollback or process death. A separate lock pool avoids data
+ * query deadlocks when the worker-wide and product locks are both held.
+ */
+async function withDatabaseLock(namespace, key, callback) {
+  if (!databaseConfigured) throw databaseUnavailableError();
+  return lockSql.begin(async (tx) => {
+    const [row] = await tx`SELECT pg_try_advisory_xact_lock(${namespace}::INTEGER, hashtext(${String(key)})) AS locked`;
+    if (row.locked !== true) return { acquired: false, result: null };
+    let held = true;
+    const heartbeat = setInterval(() => { tx`SELECT 1`.catch(() => { held = false; }); }, 10000);
+    try {
+      const result = await callback({ isHeld: () => held });
+      if (!held) throw new Error('Database refresh lock was lost.');
+      return { acquired: true, result };
+    } finally { held = false; clearInterval(heartbeat); }
+  });
+}
+
+async function getWatchlistCandidates(limit = 200) {
+  const size = Math.min(1000, Math.max(1, Number(limit) || 200));
+  const watchQuota = Math.max(1, Math.floor(size * 0.8));
+  const historyQuota = size - watchQuota;
+  return sql`
+    WITH watched AS (
+      SELECT barcode FROM favourites
+      UNION SELECT barcode FROM price_alerts WHERE active = TRUE
+    ), historical AS (
+      SELECT product_id AS barcode FROM retailer_prices
+      UNION SELECT barcode FROM products
+      UNION SELECT barcode FROM product_requests
+    ), candidates AS (
+      SELECT barcode, 'watch' AS kind FROM watched
+      UNION ALL
+      SELECT barcode, 'history' AS kind FROM historical WHERE barcode NOT IN (SELECT barcode FROM watched)
+    ), ranked AS (
+      SELECT c.barcode, c.kind, w.last_checked_at,
+        ROW_NUMBER() OVER (PARTITION BY c.kind ORDER BY w.last_checked_at ASC NULLS FIRST, c.barcode) AS rank
+      FROM candidates c LEFT JOIN watchlist_checks w ON w.barcode = c.barcode
+      WHERE c.barcode ~ '^[0-9]{8,14}$'
+    )
+    SELECT r.barcode, r.kind, r.last_checked_at,
+      COUNT(*) OVER () AS total_candidates,
+      COUNT(*) FILTER (WHERE r.kind = 'watch') OVER () AS total_watched,
+      COALESCE(p.name, f.product_name, pr.product_hint) AS product_name
+    FROM ranked r
+    LEFT JOIN products p ON p.barcode = r.barcode
+    LEFT JOIN product_requests pr ON pr.barcode = r.barcode
+    LEFT JOIN LATERAL (SELECT product_name FROM favourites WHERE barcode = r.barcode ORDER BY added_at DESC LIMIT 1) f ON TRUE
+    ORDER BY CASE WHEN (r.kind = 'watch' AND r.rank <= ${watchQuota})
+      OR (r.kind = 'history' AND r.rank <= ${historyQuota}) THEN 0 ELSE 1 END,
+      r.rank::NUMERIC / CASE WHEN r.kind = 'watch' THEN ${watchQuota} ELSE ${Math.max(1, historyQuota)} END,
+      r.last_checked_at ASC NULLS FIRST, r.barcode
+    LIMIT ${size}
+  `;
+}
+
+function positivePrice(value) {
+  return value !== null && value !== undefined && Number.isFinite(Number(value)) && Number(value) > 0;
+}
+
+function safeSourceUrl(value) {
+  try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) ? url.href : null; }
+  catch (_error) { return null; }
+}
+
+function cleanComparisonResults(results) {
+  return (Array.isArray(results) ? results : []).map((item) => {
+    const stamp = item.updated_at ?? item.updatedAt ?? item.scraped_at;
+    const date = stamp ? new Date(stamp) : null;
+    const validDate = date && Number.isFinite(date.getTime()) && date.getTime() <= Date.now() + 60000;
+    return {
+      retailer: String(item.retailer || 'unknown').slice(0, 80),
+      available: item.available === true && positivePrice(item.price),
+      price: item.available === true && positivePrice(item.price) ? Number(item.price) : null,
+      updated_at: validDate ? date.toISOString() : null,
+      url: safeSourceUrl(item.url), stale: Boolean(item.stale) || !validDate,
+      from_cache: Boolean(item.from_cache), currency: 'ZAR',
+    };
+  });
+}
+
+async function recordComparisonCheck(barcode, comparison, { failed = false } = {}) {
+  const results = cleanComparisonResults(comparison?.results);
+  const best = results.filter((item) => item.available).sort((a, b) => a.price - b.price)[0] ?? null;
+  const availability = failed ? 'failed' : best ? 'available' : 'unavailable';
+  return sql.begin(async (tx) => {
+    const [check] = await tx`INSERT INTO watchlist_checks (barcode, availability, results, last_available_at)
+      VALUES (${barcode}, ${availability}, ${tx.json(results)}, ${best ? new Date() : null})
+      ON CONFLICT (barcode) DO UPDATE SET last_checked_at = NOW(), availability = EXCLUDED.availability,
+        results = EXCLUDED.results,
+        last_available_at = COALESCE(EXCLUDED.last_available_at, watchlist_checks.last_available_at)
+      RETURNING *`;
+    await tx`INSERT INTO watchlist_observations (barcode, checked_at, availability, best_price, retailer, source_updated_at, source_url)
+      VALUES (${barcode}, ${check.last_checked_at}, ${availability}, ${best?.price ?? null},
+        ${best?.retailer ?? null}, ${best?.updated_at ?? null}, ${best?.url ?? null})`;
+    return check;
+  });
+}
+
+async function getWatchlistItems(userId, onlyBarcode = null) {
+  return sql`
+    WITH private_items AS (
+      SELECT barcode, product_name, TRUE AS favourite FROM favourites WHERE user_id = ${userId}
+      UNION ALL
+      SELECT barcode, NULL AS product_name, FALSE AS favourite FROM price_alerts WHERE user_id = ${userId} AND active = TRUE
+    ), items AS (
+      SELECT barcode, MAX(product_name) AS product_name, BOOL_OR(favourite) AS favourite FROM private_items GROUP BY barcode
+    )
+    SELECT i.*, COALESCE(p.name, i.product_name, pr.product_hint) AS display_name,
+      w.last_checked_at, w.last_available_at, w.availability, w.results,
+      COALESCE(prices.latest_prices, '[]'::JSONB) AS latest_prices
+    FROM items i LEFT JOIN products p ON p.barcode = i.barcode
+    LEFT JOIN product_requests pr ON pr.barcode = i.barcode
+    LEFT JOIN watchlist_checks w ON w.barcode = i.barcode
+    LEFT JOIN LATERAL (
+      SELECT JSONB_AGG(ROW_TO_JSON(latest)) AS latest_prices FROM (
+        SELECT DISTINCT ON (retailer) retailer, price, scraped_at AS updated_at, url, TRUE AS available
+        FROM retailer_prices WHERE product_id = i.barcode ORDER BY retailer, scraped_at DESC, id DESC
+      ) latest
+    ) prices ON TRUE
+    WHERE ${onlyBarcode}::TEXT IS NULL OR i.barcode = ${onlyBarcode}
+    ORDER BY i.favourite DESC, i.barcode
+  `;
+}
+
+async function getWatchlistTrend(userId, barcode, days = 30) {
+  // Authorization is performed in SQL as well as at the HTTP boundary.
+  return sql`
+    SELECT DATE_TRUNC('day', checked_at) AS checked_at, MIN(best_price) AS best_price,
+      COUNT(*)::INTEGER AS checks, COUNT(best_price)::INTEGER AS available_checks
+    FROM watchlist_observations
+    WHERE barcode = ${barcode} AND checked_at >= NOW() - ${days} * INTERVAL '1 day'
+      AND (EXISTS (SELECT 1 FROM favourites WHERE user_id = ${userId} AND barcode = ${barcode})
+        OR EXISTS (SELECT 1 FROM price_alerts WHERE user_id = ${userId} AND barcode = ${barcode} AND active = TRUE))
+    GROUP BY DATE_TRUNC('day', checked_at) ORDER BY checked_at ASC
+  `;
+}
+
+async function startWatchlistRun(id) {
+  // Caller holds the global worker lock, so any previous running record belongs
+  // to an interrupted worker rather than a concurrent active worker.
+  await sql`UPDATE watchlist_runs SET state = 'interrupted', finished_at = NOW() WHERE state = 'running'`;
+  await sql`INSERT INTO watchlist_runs (id) VALUES (${id})`;
+}
+
+async function updateWatchlistRun(id, metrics, state = 'running') {
+  await sql`UPDATE watchlist_runs SET metrics = ${sql.json(metrics)}, state = ${state},
+    finished_at = CASE WHEN ${state} = 'running' THEN NULL ELSE NOW() END WHERE id = ${id}`;
+}
+
+async function getWatchlistRunStatus() {
+  const [latest] = await sql`SELECT started_at, finished_at, state, metrics FROM watchlist_runs ORDER BY started_at DESC LIMIT 1`;
+  const [lastSuccess] = await sql`SELECT finished_at FROM watchlist_runs WHERE state = 'complete' ORDER BY finished_at DESC LIMIT 1`;
+  return { latestRun: latest ?? null, lastSuccessfulRunAt: lastSuccess?.finished_at ?? null };
+}
+
+async function claimAlertDelivery(alert, price, token) {
+  const [claim] = await sql`INSERT INTO alert_delivery_claims (user_id, barcode, price, claim_token)
+    SELECT user_id, barcode, ${price}, ${token} FROM price_alerts
+    WHERE id = ${alert.id} AND active = TRUE AND target_price > ${price}
+    ON CONFLICT (user_id, barcode) DO UPDATE SET price = EXCLUDED.price,
+      claim_token = EXCLUDED.claim_token, attempted_at = NOW(), sent_at = NULL, state = 'claimed'
+    WHERE alert_delivery_claims.attempted_at < NOW() - INTERVAL '24 hours'
+      OR (alert_delivery_claims.price <> EXCLUDED.price AND alert_delivery_claims.state <> 'claimed')
+    RETURNING claim_token`;
+  return claim ?? null;
+}
+
+async function completeAlertDelivery(alert, price, token, sent) {
+  await sql.begin(async (tx) => {
+    const claimed = await tx`UPDATE alert_delivery_claims SET state = ${sent ? 'sent' : 'uncertain'},
+      sent_at = CASE WHEN ${sent} THEN NOW() ELSE NULL END
+      WHERE user_id = ${alert.user_id} AND barcode = ${alert.barcode} AND claim_token = ${token}
+      RETURNING claim_token`;
+    if (sent && claimed.length) await tx`UPDATE price_alerts SET last_sent_at = NOW(), last_sent_price = ${price}
+      WHERE user_id = ${alert.user_id} AND barcode = ${alert.barcode}`;
+  });
+}
+
+Object.assign(module.exports, {
+  withDatabaseLock, getWatchlistCandidates, recordComparisonCheck, cleanComparisonResults,
+  getWatchlistItems, getWatchlistTrend, startWatchlistRun, updateWatchlistRun, getWatchlistRunStatus,
+  claimAlertDelivery, completeAlertDelivery,
+  closeDatabase: async () => {
+    if (databaseConfigured) await Promise.all([sql.end({ timeout: 5 }), lockSql.end({ timeout: 5 })]);
+  },
+});

@@ -12,6 +12,8 @@ const ALLOWED_PATHS = [
   /^product-requests$/,
   /^users\/(?:me|migrate|scans|favourites|alerts)$/,
   /^auth\/(?:login|register)$/,
+  /^users\/watchlist$/,
+  /^users\/watchlist\/\d{8,14}\/(?:trend|refresh|alert)$/,
 ];
 
 async function proxy(request: NextRequest, context: { params: { path: string[] } }) {
@@ -20,11 +22,11 @@ async function proxy(request: NextRequest, context: { params: { path: string[] }
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
   const identity = visitorIdentity(request);
-  if (path.startsWith("price/")) {
+  if (path.startsWith("price/") || /^users\/watchlist\/\d{8,14}\/refresh$/.test(path)) {
     const budget = consumePriceBudget(identity);
     if (!budget.allowed) return NextResponse.json({ error: "rate_limited", message: "Too many price requests. Please wait before trying again." }, { status: 429, headers: { "Retry-After": String(budget.retryAfter), "Cache-Control": "no-store" } });
   }
-  const base = process.env.PRICECHECK_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL ||
+  const base = process.env.TROLLEYWISE_BACKEND_URL || process.env.PRICECHECK_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL ||
     process.env.NEXT_PUBLIC_PRICE_API_URL || "https://pricecheck-backend-7tkh.onrender.com";
   let target: URL;
   try {
@@ -42,8 +44,24 @@ async function proxy(request: NextRequest, context: { params: { path: string[] }
     if (Number(request.headers.get("content-length") || 0) > 262144) {
       return NextResponse.json({ error: "request_too_large" }, { status: 413 });
     }
-    body = await request.text();
-    if (Buffer.byteLength(body) > 262144) return NextResponse.json({ error: "request_too_large" }, { status: 413 });
+    const reader = request.body?.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    if (reader) {
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > 262144) {
+            await reader.cancel();
+            return NextResponse.json({ error: "request_too_large" }, { status: 413 });
+          }
+          chunks.push(value);
+        }
+      } finally { reader.releaseLock(); }
+    }
+    body = Buffer.concat(chunks).toString("utf8");
     if (body) headers.set("Content-Type", "application/json");
   }
   const controller = new AbortController();
@@ -56,7 +74,7 @@ async function proxy(request: NextRequest, context: { params: { path: string[] }
     }
     const payload = await response.text();
     const outgoing = new Headers({ "Content-Type": "application/json", "Cache-Control": "private, no-store" });
-    for (const key of ["retry-after", "ratelimit-limit", "ratelimit-remaining", "ratelimit-reset"]) {
+    for (const key of ["retry-after", "ratelimit-limit", "ratelimit-remaining", "ratelimit-reset", "x-pricecheck-cache", "x-trolleywise-cache"]) {
       const value = response.headers.get(key);
       if (value) outgoing.set(key, value);
     }

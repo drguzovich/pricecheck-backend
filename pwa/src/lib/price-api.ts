@@ -1,3 +1,4 @@
+import { readBrandedStorage } from "@/lib/brand-storage";
 import { backendRequest } from "@/lib/backend-api";
 
 export type RetailerResult = {
@@ -41,7 +42,7 @@ export type ProductRequestResponse = {
   error?: string;
 };
 
-const PRODUCT_CACHE_PREFIX = "pricecheck-result:";
+const PRODUCT_CACHE_PREFIX = "trolleywise-result:";
 
 export function cacheComparison(comparison: ComparisonResponse) {
   if (typeof window === "undefined" || !comparison?.barcode) return;
@@ -51,7 +52,7 @@ export function cacheComparison(comparison: ComparisonResponse) {
 export function getCachedComparison(barcode: string): { comparison: ComparisonResponse; cachedAt: string } | null {
   if (typeof window === "undefined") return null;
   try {
-    const value = JSON.parse(window.localStorage.getItem(`${PRODUCT_CACHE_PREFIX}${barcode}`) || "null");
+    const value = JSON.parse(readBrandedStorage(`${PRODUCT_CACHE_PREFIX}${barcode}`) || "null");
     if (value?.comparison?.barcode === barcode && Array.isArray(value.comparison.results)) return value;
   } catch { /* ignore malformed browser storage */ }
   return null;

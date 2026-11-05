@@ -41,7 +41,7 @@ async function verifyPassword(password, storedHash) {
 }
 
 function userSecret() {
-  return process.env.USER_SYNC_JWT_SECRET || process.env.NEXTAUTH_SECRET || null;
+  return process.env.USER_SYNC_JWT_SECRET || null;
 }
 
 function validSessionEmail(value) {

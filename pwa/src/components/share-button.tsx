@@ -32,7 +32,7 @@ export function ShareButton({ productName, bestPrice, bestRetailer }: ShareButto
 
   const share = async () => {
     if (!canShare || bestPrice === null || !bestRetailer) return;
-    const text = `${productName} — best price R${bestPrice.toFixed(2)} at ${bestRetailer}. PriceCheck: ${window.location.href}`;
+    const text = `${productName} — best price R${bestPrice.toFixed(2)} at ${bestRetailer}. TrolleyWise: ${window.location.href}`;
     setMessage("");
     try {
       if (navigator.share) {

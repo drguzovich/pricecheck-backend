@@ -12,10 +12,10 @@ export function GuestSignupPrompt() {
   useEffect(() => {
     const sync = () => setScanCount(readGuestScanCount());
     sync();
-    window.addEventListener("pricecheck-guest-data", sync);
+    window.addEventListener("trolleywise-guest-data", sync);
     window.addEventListener("storage", sync);
     return () => {
-      window.removeEventListener("pricecheck-guest-data", sync);
+      window.removeEventListener("trolleywise-guest-data", sync);
       window.removeEventListener("storage", sync);
     };
   }, []);

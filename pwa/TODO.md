@@ -1,36 +1,36 @@
-# PriceCheck — Build Checklist
+# PriceCheck  -  Build Checklist
 
 Reference this file throughout the build. Work through every section in order.
 Do not report completion until every item is checked off.
 
 ---
 
-## Section 1 — Audit (do first)
+## Section 1  -  Audit (do first)
 
 - [x] Clone and read pricecheck-app (https://github.com/drguzovich/pricecheck-app)
-- [x] Clone and read pricecheck-backend (https://github.com/drguzovich/pricecheck-backend) — main cloned; server, scrapers, src/db.js and package.json read on 2026-10-19
-- [x] Confirm backend /health returns `{ status: "ok" }` at https://pricecheck-backend-7tkh.onrender.com/health — verified HTTP 200, db connected, 2026-10-19T11:04:26Z
-- [x] Confirm Woolworths scraper works — test barcode `6001069206154`
+- [x] Clone and read pricecheck-backend (https://github.com/drguzovich/pricecheck-backend)  -  main cloned; server, scrapers, src/db.js and package.json read on 2026-10-19
+- [x] Confirm backend /health returns `{ status: "ok" }` at https://pricecheck-backend-7tkh.onrender.com/health  -  verified HTTP 200, db connected, 2026-10-19T11:04:26Z
+- [x] Confirm Woolworths scraper works  -  test barcode `6001069206154`
 - [x] Document what is already built vs what is missing before writing any code
 
 ---
 
-## Section 2 — Retailer Scrapers
+## Section 2  -  Retailer Scrapers
 
 - [x] Woolworths scraper working (fix if broken)
-- [x] Pick n Pay scraper — OCC v2 JSON API via Playwright XHR interception (no proxy needed)
-- [x] Checkers scraper — playwright-extra + stealth + ScraperAPI proxy (`SCRAPER_API_KEY` env var)
-- [x] Checkers returns clean `{ available: false }` if `SCRAPER_API_KEY` not set — never crashes
+- [x] Pick n Pay scraper  -  OCC v2 JSON API via Playwright XHR interception (no proxy needed)
+- [x] Checkers scraper  -  playwright-extra + stealth + ScraperAPI proxy (`SCRAPER_API_KEY` env var)
+- [x] Checkers returns clean `{ available: false }` if `SCRAPER_API_KEY` not set  -  never crashes
 - [x] `GET /price/:barcode` runs all 3 scrapers in parallel (`Promise.allSettled`, 15s timeout each)
 - [x] One scraper failure never blocks the others
-- [x] Results cached in Neon Postgres — reuse if under 4 hours old
+- [x] Results cached in Neon Postgres  -  reuse if under 4 hours old
 - [ ] Test: barcode `6001069206154` returns real prices from Woolworths + Pick n Pay
 
 ---
 
-## Section 3 — Product Health Index (new feature)
+## Section 3  -  Product Health Index (new feature)
 
-> Similar to "Think Dirty" — score a product's ingredients for health concerns using Open Food Facts (free API, no key needed).
+> Similar to "Think Dirty"  -  score a product's ingredients for health concerns using Open Food Facts (free API, no key needed).
 
 - [x] Backend: `GET /product/:barcode/health` endpoint
 - [x] Fetch ingredient + nutrition data from `https://world.openfoodfacts.org/api/v2/product/{barcode}.json`
@@ -45,9 +45,9 @@ Do not report completion until every item is checked off.
   - Floor at 1
 - [x] Score → Grade: 8–10 = "Clean" (green), 5–7 = "OK" (amber), 1–4 = "Concerning" (red)
 - [x] Build concern tags list: e.g. `["3 additives", "High sugar", "Artificial colors"]`
-- [x] If Open Food Facts returns no data: respond `{ dataAvailable: false }` — never crash
+- [x] If Open Food Facts returns no data: respond `{ dataAvailable: false }`  -  never crash
 - [x] Frontend: "Product Health" section on `/result` page below price cards
-- [x] Health score shown as circular badge — number + grade text (BOTH color AND text label required)
+- [x] Health score shown as circular badge  -  number + grade text (BOTH color AND text label required)
 - [x] Concern tags shown as small pills (e.g. "High sugar" in amber)
 - [x] Nutri-Score letter (A–E) shown as a small badge
 - [x] If no data: grayed section "No ingredient data available for this product"
@@ -55,28 +55,28 @@ Do not report completion until every item is checked off.
 
 ---
 
-## Section 4 — User Accounts
+## Section 4  -  User Accounts
 
 - [x] Guest mode: full app works without signup (scan history + favourites in localStorage)
 - [ ] Google Sign-In via NextAuth.js on `/account` page
 - [x] Soft prompt after 3rd scan: "Save your history across devices?"
 - [ ] On sign-in: migrate localStorage history + favourites to Postgres DB
 - [x] DB schema: `users`, `scan_history`, `favourites`, `price_alerts` tables
-- [x] `/account` page — signed out state (Google Sign-In + benefits)
-- [ ] `/account` page — signed in state (name, scan count, favourites count, sign out)
-- [x] `/history` page — recent scans, newest first, tap → `/result?barcode=`
-- [x] `/history` page — guest banner: "Sign in to sync across devices"
-- [x] `/history` page — empty state: "You haven't scanned anything yet."
-- [x] `/favourites` page — starred products list, tap → result page
-- [x] `/favourites` page — empty state: "No favourites yet."
-- [x] `/favourites` page — "Set price alert" button per product
+- [x] `/account` page  -  signed out state (Google Sign-In + benefits)
+- [ ] `/account` page  -  signed in state (name, scan count, favourites count, sign out)
+- [x] `/history` page  -  recent scans, newest first, tap → `/result?barcode=`
+- [x] `/history` page  -  guest banner: "Sign in to sync across devices"
+- [x] `/history` page  -  empty state: "You haven't scanned anything yet."
+- [x] `/favourites` page  -  starred products list, tap → result page
+- [x] `/favourites` page  -  empty state: "No favourites yet."
+- [x] `/favourites` page  -  "Set price alert" button per product
 - [x] Price alerts: "Alert me when price drops below R[input]" on `/result` page
 - [ ] Price alert emails sent via `RESEND_API_KEY` env var (skip gracefully if not set)
 - [x] Backend scheduled job (every 6h) checks prices vs active alerts and sends emails
 
 ---
 
-## Section 5 — Catalogue Seed
+## Section 5  -  Catalogue Seed
 
 - [x] Seed list of 100 common SA grocery barcodes created (Ouma Rusks, Albany, Clover, Simba, Jungle Oats, Tastic, All Gold, Rama, Huletts, Ricoffy, Nescafé, Oros, Coke, Sunlight, Colgate, Dove, Pampers, etc.)
 - [x] `src/scripts/seed-catalogue.js` script created
@@ -85,15 +85,15 @@ Do not report completion until every item is checked off.
 
 ---
 
-## Section 6 — SPAR
+## Section 6  -  SPAR
 
 - [x] SPAR row on `/result` page shows grayed card: "SPAR · Store prices vary · Coming soon"
-- [x] Info tooltip: "SPAR is a franchise — prices differ per store. We're working on store-specific pricing."
+- [x] Info tooltip: "SPAR is a franchise  -  prices differ per store. We're working on store-specific pricing."
 - [x] No fake or misleading SPAR prices shown
 
 ---
 
-## Section 7 — UI / UX Polish
+## Section 7  -  UI / UX Polish
 
 - [x] Bottom navigation bar: Home 🏠 | Scan 📷 | History 🕐 | Account 👤
 - [x] Active tab highlighted in teal on all pages
@@ -101,12 +101,12 @@ Do not report completion until every item is checked off.
 - [x] Star/favourite button on `/result` page (top-right, filled = saved, outline = not saved)
 - [ ] Star works for guest (localStorage) and signed-in user (DB)
 - [x] Share button on `/result` page (`navigator.share` API, clipboard fallback)
-- [x] Share text: "[Product] — best price R[X] at [Retailer]. PriceCheck: [URL]"
-- [x] Loading skeleton on every data-fetching page — no blank screens ever
-- [x] Offline banner: "You're offline — showing cached prices" (service worker)
+- [x] Share text: "[Product]  -  best price R[X] at [Retailer]. PriceCheck: [URL]"
+- [x] Loading skeleton on every data-fetching page  -  no blank screens ever
+- [x] Offline banner: "You're offline  -  showing cached prices" (service worker)
 - [x] Service worker caches last result per barcode
 - [x] PWA install prompt after 2nd visit (`beforeinstallprompt` event)
-- [x] **CRITICAL — Rank badges**: every badge shows BOTH color AND text label
+- [x] **CRITICAL  -  Rank badges**: every badge shows BOTH color AND text label
   - Best Price = green background + "Best Price" white text
   - 2nd = orange background + "2nd" white text
   - 3rd = red background + "3rd" white text
@@ -114,21 +114,21 @@ Do not report completion until every item is checked off.
 
 ---
 
-## Section 8 — Production Readiness
+## Section 8  -  Production Readiness
 
 - [x] Sentry added to frontend (read `NEXT_PUBLIC_SENTRY_DSN` env var, skip if missing)
 - [x] Sentry added to backend (read `SENTRY_DSN` env var, skip if missing)
 - [x] Rate limiting: `express-rate-limit`, max 30 req/min/IP on `/price/:barcode`
 - [x] `GET /health` endpoint returns `{ status: "ok", db: "connected", uptime: X }`
 - [x] `public/robots.txt` added (allow all crawlers)
-- [ ] `sitemap.xml` added (home, search, scan pages)
-- [x] `/privacy` page — data collected, how used, how to delete, contact: drguzovich@gmail.com
-- [x] `/terms` page — personal use, prices indicative, no warranties
-- [x] `/about` page — what PriceCheck is, how it works (3 steps), links to /privacy and /terms
+- [x] `sitemap.xml` added (home, search, scan pages)
+- [x] `/privacy` page  -  data collected, how used, how to delete, contact: drguzovich@gmail.com
+- [x] `/terms` page  -  personal use, prices indicative, no warranties
+- [x] `/about` page  -  what PriceCheck is, how it works (3 steps), links to /privacy and /terms
 
 ---
 
-## Section 9 — Design System (apply to all screens)
+## Section 9  -  Design System (apply to all screens)
 
 | Token | Value |
 |---|---|
@@ -150,7 +150,7 @@ Do not report completion until every item is checked off.
 
 ---
 
-## Section 10 — Environment Variables
+## Section 10  -  Environment Variables
 
 Add all as empty-string placeholders in `render.yaml`. Real values set by user in Render dashboard / Manus settings. **Never hardcode secrets. App must never crash if a var is missing.**
 
@@ -158,8 +158,8 @@ Add all as empty-string placeholders in `render.yaml`. Real values set by user i
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | Neon Postgres (already set) |
-| `SCRAPER_API_KEY` | scraperapi.com — Checkers WAF bypass |
-| `RESEND_API_KEY` | resend.com — price alert emails |
+| `SCRAPER_API_KEY` | scraperapi.com  -  Checkers WAF bypass |
+| `RESEND_API_KEY` | resend.com  -  price alert emails |
 | `SENTRY_DSN` | Backend error monitoring |
 | `ALERT_FROM_EMAIL` | Sender address for price alert emails |
 
@@ -175,13 +175,13 @@ Add all as empty-string placeholders in `render.yaml`. Real values set by user i
 
 ---
 
-## Section 11 — Deploy
+## Section 11  -  Deploy
 
-- [x] Backend changes pushed to https://github.com/drguzovich/pricecheck-backend
-- [x] Render auto-deploy succeeds — `/health` returns `{ status: "ok" }`
-- [x] Frontend changes pushed to https://github.com/drguzovich/pricecheck-app
-- [x] Frontend deployed AND published via Manus built-in hosting
-- [x] Stable public URL obtained
+- [ ] Backend changes pushed to https://github.com/drguzovich/pricecheck-backend
+- [ ] Render auto-deploy succeeds  -  `/health` returns `{ status: "ok" }`
+- [ ] Frontend changes pushed to https://github.com/drguzovich/pricecheck-app
+- [ ] Frontend deployed AND published via Manus built-in hosting
+- [ ] Stable public URL obtained
 
 ---
 
@@ -189,12 +189,12 @@ Add all as empty-string placeholders in `render.yaml`. Real values set by user i
 
 Do not report done until every item below is confirmed:
 
-- [x] 1. Public URL exists and loads on mobile browser
+- [ ] 1. Public URL exists and loads on mobile browser
 - [x] 2. Home page loads with search + scan CTAs and bottom nav
 - [x] 3. Barcode `6001069206154` returns price results
 - [ ] 4. Woolworths + Pick n Pay show real prices
-- [x] 5. Checkers shows price OR clean "not available" — no crash
-- [x] 6. SPAR shows grayed "Store prices vary — coming soon" card
+- [x] 5. Checkers shows price OR clean "not available"  -  no crash
+- [x] 6. SPAR shows grayed "Store prices vary  -  coming soon" card
 - [x] 7. Product Health score shown on `/result` (Clean Score 1–10)
 - [x] 8. Health score shows concern tags (e.g. "High sugar")
 - [x] 9. If no ingredient data: grayed "No data available" section shown
@@ -208,14 +208,14 @@ Do not report done until every item below is confirmed:
 - [x] 17. `/terms` page exists with real content
 - [x] 18. `/about` page exists with real content
 - [x] 19. Bottom nav works on all pages
-- [x] 20. Loading skeletons on all data-fetching pages — no blank screens
-- [x] 21. Backend `/health` returns `{ status: "ok" }` — verified HTTP 200 on 2026-10-19
+- [x] 20. Loading skeletons on all data-fetching pages  -  no blank screens
+- [x] 21. Backend `/health` returns `{ status: "ok" }`  -  verified HTTP 200 on 2026-10-19
 - [ ] 22. Both repos pushed to GitHub with all changes
-- [x] 23. Completion report includes: **live public URL**
-- [x] 24. Completion report includes: **actual prices for barcode `6001069206154`**
+- [ ] 23. Completion report includes: **live public URL**
+- [ ] 24. Completion report includes: **actual prices for barcode `6001069206154`**
 - [ ] 25. Completion report includes: **Clean Score for barcode `6001069206154`**
 
-## Evidence and remaining gates — 19 October 2026
+## Evidence and remaining gates  -  19 October 2026
 
 Published frontend: https://pricecheck-7dykljea.manus.space, Manus publication confirmed for checkpoint03c7d54550e9906b16ba374fd65449d9cf98f7f9. Actual public 390px mobile browser checks passed (not mocked): all page routes, navigation, guest star/history/favourites/share, legal content and benchmark no-data UI. Render releasee21bbd699bc60d9815524a970cdf2d63f6b9b84f verified HTTP200 with statusok/dbconnected.
 
@@ -224,3 +224,37 @@ Benchmark6001069206154: WoolworthsR24.95ZAR. PicknPay unavailable/timed out; dir
 Final items7 and8 were genuinely validated with a different actual catalogue product (Coca-Cola2L5449000009067): score7/10OK, two additives, Nutri-ScoreE. This confirms the health feature, but is NOT a substitute for the benchmark score required byitem25. Complete-data scoring, partial/no-data behavior, colour+text badges, signed proxy identities, and failure isolation also passed regression tests.
 
 Google OAuth, authenticated cross-device migration/favourites and real email delivery remain unverified until Google/app shared signing/email credentials are configured. No keys were hardcoded; absent keys fail safely. A sourced100-item checksum-valid catalogue and direct3s seed command are supplied; rerunning live seeding requires authorised DB/admin execution access. Sitemap/public-origin configuration is being finalized using the confirmed hostname.
+
+## TrolleyWise additions approved 5 November 2026
+
+- [ ] TrolleyWise replaces customer-visible PriceCheck branding, metadata, PWA, email and legal copy; original repository identities preserved.
+- [x] Old guest history/favourites/storage keys migrate idempotently; existing data not lost on rename.
+- [ ] Genuine private test login provided and verified; login is not a mock or production authentication bypass.
+- [x] Clearly labelled Try demo is available with isolated sample data and no real-account/cloud access.
+- [ ] Real email/password login, guest-to-cloud migration, private cloud favourites and signed-in account totals verified end-to-end.
+- [ ] Password reset and email verification use expiring single-use tokens, safe generic responses and actual configured email delivery.
+- [ ] Continuous multi-item scanning and manual-entry queue deduplicate barcodes, show per-item status/retry/save, and allow multiple favourites.
+- [ ] Every cloud favourite and active-alert barcode is explicitly included in a reliable six-hour scheduled worker, deduplicated across users and independent of email readiness.
+- [ ] Watchlist shows actual latest/best price, source and last-check time, stale/unavailable state, trend history and manual refresh; guest status is honest.
+- [ ] Alert management excludes inactive alerts, avoids duplicate alerts/refreshes, handles named no-price products, and verifies actual email delivery.
+- [ ] Product page shows available ingredient text and actual nutrition per100g with units; missing values never shown as zero.
+- [ ] Empty ingredient language fallback repaired; partial nutrition rendered even if a Clean Score cannot be calculated.
+- [ ] Health source attribution, missing vs temporarily-unavailable messages, cached/checked times and dedicated retry are visible.
+- [ ] Exact original Clean Score formula retained, clearly identified as a limited non-medical heuristic; factual flags explained without unsupported good/bad endorsements.
+- [ ] Optional label-data input/upload is explicitly user-confirmed and never passed off as verified Open Food Facts coverage.
+- [ ] User-added Apple design/motion/accessibility skills remain reflected in branding, watchlist, scan queue and nutrition UI.
+- [ ] Revised100-item sourced seed executed against authorized production DB and result recorded without fabricated price coverage.
+- [ ] Full new source, UX, tests and deployment declarations pushed to both original GitHub repositories; final deployed revisions verified.
+- [ ] One integrated read-only acceptance/security review performed and confirmed defects fixed.
+
+Old evidence remains historical. Original exact-EAN price and Clean Score gates remain open unless actual sources satisfy them or the user explicitly revises those requirements. New checklist entries are checked only after outcome verification.
+
+### 5 November integration evidence (not a completion claim)
+
+The new frontend and bundled backend PWA compile successfully. Isolated checks passed125auth assertions,17watchlist tests,14health fixture groups, strict PnP parser/cancellation tests,69central-auth proxy assertions, guest key migration/clear/count regressions and real Express-to-Next rawJSON loopback tests. The390px production-build browser check confirms zero demo APIcalls, no guest-storage changes from demo, migration of a synthetic legacy favourite, unique manualqueue barcode, TrolleyWise title/copy on primarypages and no horizontaloverflow/browserexceptions. Fixtures are not real retailer prices or real login evidence.
+
+Render dashboard access is available. A newly generated independent app-session key and publicManus origin settings were saved only in protected Render settings; existing database/user-sync/admin credentials were preserved, not copied tosource or frontendhosting. Real login awaits the final source rollout and liveacceptance. The dashboard currently has one Free Node webservice and no scheduled cron. Newworker creation requiresbillingapproval (officialminimumUS$1/month plusmeteredcompute). No Google/Resend/ScraperAPI values were supplied or fabricated. Eightconfirmedreviewfindings are being corrected before deployment.
+
+### Integration correction evidence
+
+All eight source-review findings were addressed before rollout: raw Next JSON streams, principal-isolated history/account state, confirmed result-history save/retry, typed health-outage preservation, latest-unavailable price cache, coordinated stale refreshes, first-scan count and supplied allergen/source fields. The corrected final regression run passed23health/SW/frontend fixturegroups and32combinedwatchlist/price-cache tests,125auth assertions, strictPnP tests, originalbackend tests, guest migration/count and actualExpress/Next parser regressions. These are local/synthetic/loopback results, not productionacceptance. Queue routes send unconfirmed history into the pending-save path, and retries explicitly warn about uncertain commits. Real login/token/DB/worker/provider delivery gates remain open.

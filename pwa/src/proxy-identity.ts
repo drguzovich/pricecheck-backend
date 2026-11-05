@@ -29,7 +29,7 @@ export function consumePriceBudget(identity: string) {
 }
 
 export function signedVisitorHeaders(identity: string): Record<string, string> {
-  const secret = process.env.USER_SYNC_JWT_SECRET || process.env.NEXTAUTH_SECRET;
+  const secret = process.env.USER_SYNC_JWT_SECRET;
   if (!secret) return {};
   const timestamp = String(Date.now());
   const signature = createHmac("sha256", secret).update(`${timestamp}:${identity}`).digest("hex");

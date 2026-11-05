@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { readBrandedStorage } from "@/lib/brand-storage";
 
 type DeferredInstallPrompt = Event & {
   prompt: () => Promise<void>;
@@ -16,9 +17,13 @@ export function InstallButton() {
   useEffect(() => {
     const standalone = window.matchMedia("(display-mode: standalone)").matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
-    const visits = Number(window.localStorage.getItem("pricecheck-visits") || "0") + 1;
+    let visits = 1;
+    try {
+      const previous = Number(readBrandedStorage("trolleywise-visits") || "0");
+      visits = (Number.isSafeInteger(previous) && previous >= 0 ? previous : 0) + 1;
+      window.localStorage.setItem("trolleywise-visits", String(visits));
+    } catch { /* Blocked device storage must not crash the rest of the app. */ }
     visitsRef.current = visits;
-    window.localStorage.setItem("pricecheck-visits", String(visits));
     if (ios && !standalone && visits >= 2) setShowIOSHelp(true);
     const onBeforeInstall = (event: Event) => {
       event.preventDefault();

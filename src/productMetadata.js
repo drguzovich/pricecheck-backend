@@ -29,7 +29,7 @@ async function getProductMetadata(barcode) {
     const response = await fetch(`${OPEN_FOOD_FACTS_BASE}/${encodeURIComponent(barcode)}.json`, {
       headers: {
         Accept: 'application/json',
-        'User-Agent': 'PriceCheck/1.0 (+https://github.com/drguzovich/pricecheck-backend)',
+        'User-Agent': 'TrolleyWise/1.0 (+https://github.com/drguzovich/pricecheck-backend)',
       },
       signal: controller.signal,
     });

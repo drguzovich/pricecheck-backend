@@ -3,62 +3,85 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import { clearGuestData, guestDataPayload } from "@/lib/guest-data";
-import { migrateGuestData } from "@/lib/user-api";
+import { userRequest } from "@/lib/user-api";
 
 function payloadFingerprint(payload: ReturnType<typeof guestDataPayload>) {
-  return [
-    payload.clientId,
-    ...payload.scans.map((scan) => `s:${scan.id}`),
-    ...payload.favourites.map((favourite) => `f:${favourite.id}`),
-  ].join("|");
+  return JSON.stringify({ clientId: payload.clientId, scans: payload.scans, favourites: payload.favourites });
 }
 
 export function GuestDataSync() {
   const { data: session, status } = useSession();
-  const attempted = useRef(false);
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const attempted = useRef<string | null>(null);
+  const inFlight = useRef<AbortController | null>(null);
+  const mounted = useRef(false);
+  const identity = status === "authenticated" ? (session?.user as { id?: string } | undefined)?.id || session?.user?.email || "" : "";
+  const identityRef = useRef(identity);
+  identityRef.current = identity;
 
   const sync = useCallback(async () => {
-    if (status !== "authenticated") return;
-    const payload = guestDataPayload();
-    if (!payload.scans.length && !payload.favourites.length) {
-      attempted.current = true;
-      setError("");
-      return;
-    }
-    const accountId = (session?.user as { id?: string } | undefined)?.id || "account";
-    const markerKey = `pricecheck-guest-migration:${accountId}`;
-    const fingerprint = payloadFingerprint(payload);
-    if (window.localStorage.getItem(markerKey) === fingerprint) {
-      clearGuestData();
-      attempted.current = true;
-      setError("");
-      return;
-    }
-    attempted.current = true;
+    if (status !== "authenticated" || !identity || inFlight.current) return;
+    const owner = identity;
+    const controller = new AbortController();
+    inFlight.current = controller;
+    attempted.current = owner;
+    setBusy(true);
     setError("");
+    let timer: number | undefined;
     try {
-      await migrateGuestData();
-      // Only a confirmed backend response marks this payload synced or clears it.
-      window.localStorage.setItem(markerKey, fingerprint);
+      const payload = guestDataPayload();
+      if (!payload.scans.length && !payload.favourites.length) return;
+      const fingerprint = payloadFingerprint(payload);
+      timer = window.setTimeout(() => controller.abort(), 35_000);
+      // Send exactly the captured data. A second read inside the API helper could race with new guest scans.
+      const response = await userRequest<{ summary?: { scanCount?: number; favouritesCount?: number } }>("/users/migrate", {
+        method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      });
+      if (!Number.isSafeInteger(response.summary?.scanCount) || !Number.isSafeInteger(response.summary?.favouritesCount) || (response.summary?.scanCount ?? -1) < 0 || (response.summary?.favouritesCount ?? -1) < 0) throw new Error("The service did not confirm the migration. Your device data is still available.");
+      if (!mounted.current || controller.signal.aborted || identityRef.current !== owner) return;
+      // Never clear scans or favourites added while the captured payload was in flight.
+      if (payloadFingerprint(guestDataPayload()) !== fingerprint) {
+        setError("The first items synced, but new device items arrived during sync. Retry to include them. All device items have been kept.");
+        return;
+      }
+      // Always ask the authenticated backend, even when an old browser marker exists.
+      // Stable guest record IDs let the backend safely deduplicate retries.
+      const accountId = (session?.user as { id?: string } | undefined)?.id;
+      if (accountId) window.localStorage.setItem(`trolleywise-guest-migration:${accountId}`, fingerprint);
       clearGuestData();
+      window.dispatchEvent(new Event("trolleywise-favourites-changed"));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "We could not sync your on-device history yet.");
-      attempted.current = false;
+      if (mounted.current && inFlight.current === controller && identityRef.current === owner) setError(caught instanceof Error && caught.name === "AbortError" ? "Sync timed out. Your device data is still here. Please retry." : caught instanceof Error ? caught.message : "Could not sync your device history and favourites. They have been kept.");
+    } finally {
+      if (timer !== undefined) window.clearTimeout(timer);
+      if (inFlight.current === controller) {
+        inFlight.current = null;
+        if (mounted.current && identityRef.current === owner) setBusy(false);
+      }
     }
-  }, [session?.user, status]);
+  }, [identity, session?.user, status]);
 
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; inFlight.current?.abort(); inFlight.current = null; }; }, []);
   useEffect(() => {
-    if (status === "authenticated" && !attempted.current) void sync();
     if (status !== "authenticated") {
-      attempted.current = false;
+      inFlight.current?.abort();
+      inFlight.current = null;
+      attempted.current = null;
+      setBusy(false);
       setError("");
+      return;
     }
-  }, [status, sync]);
+    if (identity && attempted.current !== identity) {
+      inFlight.current?.abort();
+      inFlight.current = null;
+      void sync();
+    }
+  }, [identity, status, sync]);
 
-  if (!error) return null;
-  return <aside className="sync-status inline-error" role="status">
-    <span>Your on-device history has not synced. {error}</span>
-    <button className="button button-secondary" type="button" onClick={() => void sync()}>Retry sync</button>
+  if (!busy && !error) return null;
+  return <aside className={`sync-status${error ? " inline-error" : ""}`} role="status">
+    <span>{busy ? "Syncing your device history and favourites…" : `Some on-device history or favourites have not synced. ${error}`}</span>
+    {error && <button className="button button-secondary" style={{ minHeight: 44 }} type="button" disabled={busy} onClick={() => void sync()}>Retry sync</button>}
   </aside>;
 }

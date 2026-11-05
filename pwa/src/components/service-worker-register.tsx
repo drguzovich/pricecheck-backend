@@ -14,7 +14,7 @@ export function ServiceWorkerRegister() {
         registrations.forEach((registration) => registration.unregister());
       });
       if ("caches" in window) {
-        caches.keys().then((keys) => keys.filter((key) => key.startsWith("pricecheck-shell-")).forEach((key) => caches.delete(key)));
+        caches.keys().then((keys) => keys.filter((key) => /^(pricecheck|trolleywise)-shell-/.test(key)).forEach((key) => caches.delete(key)));
       }
       return;
     }

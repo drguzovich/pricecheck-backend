@@ -43,6 +43,16 @@ services:
         sync: false
       - key: NEXTAUTH_SECRET
         sync: false
+      - key: APP_SESSION_SECRET
+        sync: false
+      - key: TROLLEYWISE_WEB_URL
+        sync: false
+      - key: AUTH_PUBLIC_ORIGIN
+        sync: false
+      - key: NEXT_PUBLIC_API_URL
+        value: https://pricecheck-backend-7tkh.onrender.com
+      - key: WATCHLIST_WORKER_ENABLED
+        value: "false"
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
@@ -63,11 +73,24 @@ services:
     name: pricecheck-alerts
     env: node
     schedule: "0 */6 * * *"
-    buildCommand: npm install
-    startCommand: npm run alerts:run
+    # Canonical declared identity. The current dashboard has no cron service.
+    # Activate only after the owner approves Render worker billing.
+    buildCommand: >-
+      npm install --legacy-peer-deps &&
+      PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/.cache/playwright
+      npx playwright install chromium
+    startCommand: npm run watchlist:run
     envVars:
       - key: NODE_ENV
         value: production
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /opt/render/project/.cache/playwright
+      - key: WATCHLIST_WORKER_ENABLED
+        value: "true"
+      - key: WATCHLIST_BATCH_LIMIT
+        value: "200"
+      - key: WATCHLIST_MAX_RUNTIME_MS
+        value: "1200000"
       - key: DATABASE_URL
         sync: false
       - key: SMTP_HOST
@@ -86,6 +109,10 @@ services:
         sync: false
       - key: SCRAPER_API_KEY
         sync: false
+      - key: PARSE_API_KEY
+        sync: false
+      - key: RETAILER_TIMEOUT_MS
+        value: "15000"
       - key: PRICECHECK_WEB_URL
         sync: false
       - key: SENTRY_DSN
