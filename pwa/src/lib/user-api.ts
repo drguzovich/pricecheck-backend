@@ -28,8 +28,16 @@ export async function getAccountToken(expectedIdentity?: string) {
   return body.token ?? null;
 }
 
-export async function userRequest<T>(path: string, init?: RequestInit) {
-  const token = await getAccountToken();
+export type AccountRequestGuard = { expectedIdentity?: string; shouldProceed?: () => boolean };
+
+export async function userRequest<T>(path: string, init?: RequestInit, guard?: AccountRequestGuard) {
+  const checkOwner = () => {
+    if (guard?.shouldProceed && !guard.shouldProceed()) throw new Error("Your signed-in account or scan queue changed. Check the current account before retrying.");
+  };
+  checkOwner();
+  const token = await getAccountToken(guard?.expectedIdentity);
+  // Token issuance is asynchronous: never start a mutation after its owner changed.
+  checkOwner();
   if (!token) throw new Error("Sign in is required for this action.");
   const response = await backendRequest(path, {
     ...init,
@@ -79,12 +87,12 @@ export function createWatchlistAlert(barcode: string, targetPrice: number) {
 
 export function accountSummary() { return userRequest<{ summary: AccountSummary }>("/users/me"); }
 export function cloudHistory() { return userRequest<{ scans: StoredScan[] }>("/users/scans"); }
-export function recordCloudScan(barcode: string, productName: string, lastPrice: number | null) {
-  return userRequest<{ scan: StoredScan }>("/users/scans", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ barcode, product_name: productName, last_price: lastPrice, scanned_at: new Date().toISOString() }) });
+export function recordCloudScan(barcode: string, productName: string, lastPrice: number | null, options?: AccountRequestGuard & { scannedAt?: string }) {
+  return userRequest<{ scan: StoredScan }>("/users/scans", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ barcode, product_name: productName, last_price: lastPrice, scanned_at: options?.scannedAt ?? new Date().toISOString() }) }, options);
 }
 export function cloudFavourites() { return userRequest<{ favourites: StoredFavourite[] }>("/users/favourites"); }
-export function addCloudFavourite(barcode: string, productName: string) {
-  return userRequest<{ favourite: StoredFavourite }>("/users/favourites", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ barcode, product_name: productName }) });
+export function addCloudFavourite(barcode: string, productName: string, guard?: AccountRequestGuard) {
+  return userRequest<{ favourite: StoredFavourite }>("/users/favourites", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ barcode, product_name: productName }) }, guard);
 }
 export function removeCloudFavourite(barcode: string) { return userRequest<{ removed: boolean }>(`/users/favourites?barcode=${encodeURIComponent(barcode)}`, { method: "DELETE" }); }
 export function cloudAlerts() { return userRequest<{ alerts: StoredAlert[] }>("/users/alerts"); }

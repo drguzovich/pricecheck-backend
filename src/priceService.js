@@ -29,10 +29,11 @@ async function upsertProduct(data) {
     INSERT INTO products (barcode, name, brand, pack_size, image_url, updated_at)
     VALUES (${data.barcode}, ${data.name}, ${data.brand ?? null}, ${data.pack_size ?? null}, ${data.image_url ?? null}, NOW())
     ON CONFLICT (barcode) DO UPDATE SET
-      name = EXCLUDED.name,
-      brand = EXCLUDED.brand,
-      pack_size = EXCLUDED.pack_size,
-      image_url = EXCLUDED.image_url,
+      name = CASE WHEN EXCLUDED.name IS NULL OR EXCLUDED.name = EXCLUDED.barcode
+        THEN products.name ELSE EXCLUDED.name END,
+      brand = COALESCE(EXCLUDED.brand, products.brand),
+      pack_size = COALESCE(EXCLUDED.pack_size, products.pack_size),
+      image_url = COALESCE(EXCLUDED.image_url, products.image_url),
       updated_at = NOW()
   `;
 }
@@ -218,7 +219,10 @@ async function getComparison(barcode, { forceRefresh = false, adapters = RETAILE
   const cachedByRetailer = new Map(
     cachedRows.filter((row) => row.retailer).map((row) => [row.retailer, row])
   );
-  const knownProduct = cachedRows.find((row) => row.name) ?? (cacheEnabled ? await getKnownProduct(barcode) : null);
+  const storedProduct = cachedRows.find((row) => row.name && row.name !== barcode) ?? (cacheEnabled ? await getKnownProduct(barcode) : null);
+  // A barcode-only placeholder is not metadata and must not block a real
+  // metadata lookup or the sourced catalogue/name hint.
+  const knownProduct = storedProduct?.name && String(storedProduct.name).trim() !== barcode ? storedProduct : null;
   const namedHint = suppliedHint?.name ? { ...suppliedHint, barcode } : null;
   const metadataProduct = knownProduct || namedHint ? null : productMetadata === undefined
     ? await getProductMetadata(barcode)
@@ -282,7 +286,7 @@ async function getComparison(barcode, { forceRefresh = false, adapters = RETAILE
     });
   }
 
-  const liveProduct = results.find((result) => result.available && result.name);
+  const liveProduct = results.find((result) => result.available && result.name && result.name !== barcode);
   const product = {
     barcode,
     name: liveProduct?.name ?? productHint?.name ?? null,

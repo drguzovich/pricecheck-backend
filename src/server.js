@@ -338,6 +338,8 @@ app.route('/users/scans')
     const barcode = String(req.body?.barcode || '').replace(/\D/g, '');
     const productName = String(req.body?.product_name || '').trim();
     if (!validBarcode(barcode) || !productName || productName.length > 240) return res.status(400).json({ error: 'invalid_scan', message: 'A valid barcode and product name are required.' });
+    const scannedAt = req.body?.scanned_at;
+    if (scannedAt !== undefined && (typeof scannedAt !== 'string' || scannedAt.length > 64 || !Number.isFinite(Date.parse(scannedAt)))) return res.status(400).json({ error: 'invalid_scan_time', message: 'A valid scan timestamp is required.' });
     try {
       const user = await upsertUser(req.user);
       const lastPrice = validPrice(req.body?.last_price) ? Number(req.body.last_price) : null;

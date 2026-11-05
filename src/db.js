@@ -340,9 +340,13 @@ async function listScanHistory(userId, limit = 100) {
 }
 
 async function recordScan(userId, scan) {
+  const scannedAt = new Date(scan.scannedAt ?? Date.now()).toISOString();
+  const eventKey = `live:${scan.barcode}:${scannedAt}`;
   const [entry] = await sql`
-    INSERT INTO scan_history (user_id, barcode, product_name, last_price, scanned_at)
-    VALUES (${userId}, ${scan.barcode}, ${scan.productName}, ${scan.lastPrice ?? null}, ${scan.scannedAt ?? new Date()})
+    INSERT INTO scan_history (user_id, barcode, product_name, last_price, scanned_at, migration_key)
+    VALUES (${userId}, ${scan.barcode}, ${scan.productName}, ${scan.lastPrice ?? null}, ${scannedAt}, ${eventKey})
+    ON CONFLICT (user_id, migration_key) WHERE migration_key IS NOT NULL
+    DO UPDATE SET migration_key = EXCLUDED.migration_key
     RETURNING id, barcode, product_name, last_price, scanned_at
   `;
   return entry;

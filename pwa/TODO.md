@@ -177,11 +177,11 @@ Add all as empty-string placeholders in `render.yaml`. Real values set by user i
 
 ## Section 11  -  Deploy
 
-- [ ] Backend changes pushed to https://github.com/drguzovich/pricecheck-backend
-- [ ] Render auto-deploy succeeds  -  `/health` returns `{ status: "ok" }`
-- [ ] Frontend changes pushed to https://github.com/drguzovich/pricecheck-app
-- [ ] Frontend deployed AND published via Manus built-in hosting
-- [ ] Stable public URL obtained
+- [x] Backend changes pushed to https://github.com/drguzovich/pricecheck-backend
+- [x] Render auto-deploy succeeds  -  `/health` returns `{ status: "ok" }`
+- [x] Frontend changes pushed to https://github.com/drguzovich/pricecheck-app
+- [x] Frontend deployed AND published via Manus built-in hosting
+- [x] Stable public URL obtained
 
 ---
 
@@ -189,7 +189,7 @@ Add all as empty-string placeholders in `render.yaml`. Real values set by user i
 
 Do not report done until every item below is confirmed:
 
-- [ ] 1. Public URL exists and loads on mobile browser
+- [x] 1. Public URL exists and loads on mobile browser
 - [x] 2. Home page loads with search + scan CTAs and bottom nav
 - [x] 3. Barcode `6001069206154` returns price results
 - [ ] 4. Woolworths + Pick n Pay show real prices
@@ -210,7 +210,7 @@ Do not report done until every item below is confirmed:
 - [x] 19. Bottom nav works on all pages
 - [x] 20. Loading skeletons on all data-fetching pages  -  no blank screens
 - [x] 21. Backend `/health` returns `{ status: "ok" }`  -  verified HTTP 200 on 2026-10-19
-- [ ] 22. Both repos pushed to GitHub with all changes
+- [x] 22. Both repos pushed to GitHub with all changes
 - [ ] 23. Completion report includes: **live public URL**
 - [ ] 24. Completion report includes: **actual prices for barcode `6001069206154`**
 - [ ] 25. Completion report includes: **Clean Score for barcode `6001069206154`**
@@ -227,25 +227,25 @@ Google OAuth, authenticated cross-device migration/favourites and real email del
 
 ## TrolleyWise additions approved 5 November 2026
 
-- [ ] TrolleyWise replaces customer-visible PriceCheck branding, metadata, PWA, email and legal copy; original repository identities preserved.
+- [x] TrolleyWise replaces customer-visible PriceCheck branding, metadata, PWA, email and legal copy; original repository identities preserved.
 - [x] Old guest history/favourites/storage keys migrate idempotently; existing data not lost on rename.
-- [ ] Genuine private test login provided and verified; login is not a mock or production authentication bypass.
+- [x] Genuine private test login provided and verified; login is not a mock or production authentication bypass.
 - [x] Clearly labelled Try demo is available with isolated sample data and no real-account/cloud access.
-- [ ] Real email/password login, guest-to-cloud migration, private cloud favourites and signed-in account totals verified end-to-end.
+- [x] Real email/password login, guest-to-cloud migration, private cloud favourites and signed-in account totals verified end-to-end.
 - [ ] Password reset and email verification use expiring single-use tokens, safe generic responses and actual configured email delivery.
 - [ ] Continuous multi-item scanning and manual-entry queue deduplicate barcodes, show per-item status/retry/save, and allow multiple favourites.
 - [ ] Every cloud favourite and active-alert barcode is explicitly included in a reliable six-hour scheduled worker, deduplicated across users and independent of email readiness.
 - [ ] Watchlist shows actual latest/best price, source and last-check time, stale/unavailable state, trend history and manual refresh; guest status is honest.
 - [ ] Alert management excludes inactive alerts, avoids duplicate alerts/refreshes, handles named no-price products, and verifies actual email delivery.
-- [ ] Product page shows available ingredient text and actual nutrition per100g with units; missing values never shown as zero.
-- [ ] Empty ingredient language fallback repaired; partial nutrition rendered even if a Clean Score cannot be calculated.
-- [ ] Health source attribution, missing vs temporarily-unavailable messages, cached/checked times and dedicated retry are visible.
-- [ ] Exact original Clean Score formula retained, clearly identified as a limited non-medical heuristic; factual flags explained without unsupported good/bad endorsements.
-- [ ] Optional label-data input/upload is explicitly user-confirmed and never passed off as verified Open Food Facts coverage.
-- [ ] User-added Apple design/motion/accessibility skills remain reflected in branding, watchlist, scan queue and nutrition UI.
+- [x] Product page shows available ingredient text and actual nutrition per100g with units; missing values never shown as zero.
+- [x] Empty ingredient language fallback repaired; partial nutrition rendered even if a Clean Score cannot be calculated.
+- [x] Health source attribution, missing vs temporarily-unavailable messages, cached/checked times and dedicated retry are visible.
+- [x] Exact original Clean Score formula retained, clearly identified as a limited non-medical heuristic; factual flags explained without unsupported good/bad endorsements.
+- [x] Optional label-data input/upload is explicitly user-confirmed and never passed off as verified Open Food Facts coverage.
+- [x] User-added Apple design/motion/accessibility skills remain reflected in branding, watchlist, scan queue and nutrition UI.
 - [ ] Revised100-item sourced seed executed against authorized production DB and result recorded without fabricated price coverage.
 - [ ] Full new source, UX, tests and deployment declarations pushed to both original GitHub repositories; final deployed revisions verified.
-- [ ] One integrated read-only acceptance/security review performed and confirmed defects fixed.
+- [x] One integrated read-only acceptance/security review performed and confirmed defects fixed.
 
 Old evidence remains historical. Original exact-EAN price and Clean Score gates remain open unless actual sources satisfy them or the user explicitly revises those requirements. New checklist entries are checked only after outcome verification.
 
@@ -258,3 +258,19 @@ Render dashboard access is available. A newly generated independent app-session 
 ### Integration correction evidence
 
 All eight source-review findings were addressed before rollout: raw Next JSON streams, principal-isolated history/account state, confirmed result-history save/retry, typed health-outage preservation, latest-unavailable price cache, coordinated stale refreshes, first-scan count and supplied allergen/source fields. The corrected final regression run passed23health/SW/frontend fixturegroups and32combinedwatchlist/price-cache tests,125auth assertions, strictPnP tests, originalbackend tests, guest migration/count and actualExpress/Next parser regressions. These are local/synthetic/loopback results, not productionacceptance. Queue routes send unconfirmed history into the pending-save path, and retries explicitly warn about uncertain commits. Real login/token/DB/worker/provider delivery gates remain open.
+
+### Source saved
+
+New frontend source/UX and assets pushed to originalGitHubmain a8006ed; backend APIs/PWAmirror/tests pushed to originalGitHubmain9802e26. CanonicalManusmain afcdde2 pushed. Backendauto-deploy and frontendpublication are being verified; these pushes alone do not complete releaseacceptance.
+
+### Genuine live release and account evidence (5 November2026)
+
+Manus publication confirmed checkpoint afcdde2e4530c803fa88ed1f7a369c1e7f306b66 at https://pricecheck-7dykljea.manus.space. Render HTTP200 statusok/dbconnected with revision9802e267cc42e472efd336592585e1cf0c277bbb verified. Genuine private email/password signup/login, secureHttpOnlySameSiteNone cookies, guest history/favourite migration and clear-after-success,3real manualqueuecodes,3privatecloudfavourites, actualCoca-Cola ingredients/nutrition/score7/10 and signout401 gate passed. A freshindependent login confirmedfavouritespersist3. Password/tokenvalues are excluded from Git, evidence and logs; private testlogin details are delivered separately.
+
+The follow-up found scanhistoryskipped two genuinelynewqueue scans when their returnedprice was age-stale; favouriteswere notlost. This is being corrected to recordtheactualscanevent with nullpricewhenstale and stableeventidempotency, without reusing an agedpriceasfresh or auto-replaying oldqueuedata acrossaccounts. Do not mark the newmulti-scanoutcome fullycomplete before its liveaffectedretest.
+
+Monitoring currentlytruthfully reportsworkerConfiguredfalse/latestRunnull/deliveryEnabledfalse. Google/email/ScraperAPI are stillunconfigured. Originalbarcode6001069206154 currentlygenuineWoolworthsR24.95, noexactPnPmatch and noOFFscore; finalitems4/25remainopen.
+
+The repeat-logincheck confirmed3privatefavouritespersist. Queue scanhistory correction also makes stable retries database-idempotent without rewriting legacyNULL-key history. Actual price/no-data facts remain unchanged. Source metadata is being retained when a retailer onlysupplies aprice, so missingnames cannot overwrite establishedproduct names withbarcode placeholders.
+
+The queue fix passed20isolated lifecycle/API regressions; backendstableScanKey, metadata-retention and cache suites passed22affectedtests plus originalbackend regressions. This does not yetreplace the requiredaffectedliveaccount/scanhistoryretest.

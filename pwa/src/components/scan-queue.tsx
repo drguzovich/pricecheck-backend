@@ -12,6 +12,8 @@ import { enqueueScan, restoreScanQueue, runBounded, SCAN_COMPARE_CONCURRENCY, SC
 
 export type ScanQueueHandle = { add: (barcode: string, source: "manual" | "camera") => ReturnType<typeof enqueueScan>["outcome"] };
 type SaveState = { status: "saving" | "saved" | "error"; message: string };
+type HistoryCandidate = { owner: string | null; ownerStatus: "authenticated" | "unauthenticated" | null };
+const historyKey = (item: ScanQueueItem) => `${item.barcode}:${item.addedAt}`;
 const labels = { queued: "Waiting to compare", loading: "Checking retailer prices", success: "Comparison ready", missing: "No confirmed price available", error: "Comparison failed", cancelled: "Comparison cancelled" };
 
 export const ScanQueue = forwardRef<ScanQueueHandle>(function ScanQueue(_, ref) {
@@ -34,10 +36,12 @@ export const ScanQueue = forwardRef<ScanQueueHandle>(function ScanQueue(_, ref) 
   const storageEnabled = useRef(true);
   const comparisons = useRef(new Map<string, AbortController>());
   const recordingHistory = useRef(new Set<string>());
+  // Deliberately never restored from device storage. Only add / explicit history retry creates a candidate.
+  const historyCandidates = useRef(new Map<string, HistoryCandidate>());
   const saving = useRef(new Set<string>());
   const historyFailures = useRef(new Set<string>());
   const batchBusyRef = useRef(false);
-  const accountKey = status === "authenticated" ? session?.user?.email || (session?.user as { id?: string })?.id || "signed-in" : status;
+  const accountKey = status === "authenticated" ? (session?.user as { id?: string })?.id || session?.user?.email?.toLowerCase() || null : status;
   const accountRef = useRef(accountKey);
   accountRef.current = accountKey;
   const sessionStatusRef = useRef(status);
@@ -82,6 +86,12 @@ export const ScanQueue = forwardRef<ScanQueueHandle>(function ScanQueue(_, ref) 
   useImperativeHandle(ref, () => ({ add(value, source) {
     const result = enqueueScan(itemsRef.current, value, source);
     if (result.outcome === "added") {
+      const item = result.items[result.items.length - 1];
+      const ownerStatus = sessionStatusRef.current;
+      historyCandidates.current.set(historyKey(item), {
+        owner: ownerStatus === "loading" ? null : accountRef.current,
+        ownerStatus: ownerStatus === "loading" ? null : ownerStatus,
+      });
       commit(() => result.items);
       setNotice(`Added barcode ${result.barcode}. Keep scanning to add your next product.`);
     } else if (result.outcome === "full") {
@@ -125,27 +135,45 @@ export const ScanQueue = forwardRef<ScanQueueHandle>(function ScanQueue(_, ref) 
   }, [commit, items, ready, workVersion]);
 
   useEffect(() => {
-    if (!ready || status === "loading") return;
-    const candidates = itemsRef.current.filter((item) => !item.historyRecorded && (item.status === "success" || item.status === "missing") && !item.offer?.stale && !recordingHistory.current.has(item.barcode) && !historyFailures.current.has(item.barcode)).slice(0, 2 - recordingHistory.current.size);
+    if (!ready || status === "loading" || !accountKey) return;
+    historyCandidates.current.forEach((candidate, key) => {
+      // A scan added while loading belongs to the FIRST settled owner, not a later account.
+      if (candidate.owner === null) { candidate.owner = accountKey; candidate.ownerStatus = status; }
+      else if (candidate.owner !== accountKey || candidate.ownerStatus !== status) historyCandidates.current.delete(key);
+    });
+    const candidates = itemsRef.current.filter((item) => {
+      const key = historyKey(item);
+      const candidate = historyCandidates.current.get(key);
+      return !item.historyRecorded && (item.status === "success" || item.status === "missing") && candidate?.owner === accountKey && candidate.ownerStatus === status && !recordingHistory.current.has(key) && !historyFailures.current.has(key);
+    }).slice(0, Math.max(0, 2 - recordingHistory.current.size));
     for (const item of candidates) {
       const owner = accountKey;
-      recordingHistory.current.add(item.barcode);
+      const ownerStatus = status;
+      const key = historyKey(item);
+      const candidate = historyCandidates.current.get(key);
+      const shouldProceed = () => mounted.current && accountRef.current === owner && sessionStatusRef.current === ownerStatus && historyCandidates.current.get(key) === candidate && itemsRef.current.some((row) => historyKey(row) === key);
+      const lastPrice = item.offer?.stale ? null : item.offer?.price ?? null;
+      recordingHistory.current.add(key);
       void (async () => {
         try {
-          if (sessionStatusRef.current === "authenticated") {
-            const response = await recordCloudScan(item.barcode, item.productName || item.barcode, item.offer?.price ?? null);
+          if (!shouldProceed()) throw new Error("The account or scan queue changed.");
+          if (ownerStatus === "authenticated") {
+            const response = await recordCloudScan(item.barcode, item.productName || item.barcode, lastPrice, { scannedAt: item.addedAt, expectedIdentity: owner, shouldProceed });
             if (response.scan?.barcode !== item.barcode) throw new Error("History save was not confirmed.");
           } else {
-            recordGuestScan({ barcode: item.barcode, productName: item.productName || item.barcode, lastPrice: item.offer?.price ?? null, scannedAt: item.addedAt });
+            recordGuestScan({ barcode: item.barcode, productName: item.productName || item.barcode, lastPrice, scannedAt: item.addedAt });
           }
-          if (accountRef.current === owner) commit((current) => current.map((row) => row.barcode === item.barcode && row.addedAt === item.addedAt ? { ...row, historyRecorded: true } : row));
+          if (shouldProceed()) {
+            commit((current) => current.map((row) => historyKey(row) === key ? { ...row, historyRecorded: true } : row));
+            historyCandidates.current.delete(key);
+          }
         } catch {
-          if (mounted.current && accountRef.current === owner) {
-            historyFailures.current.add(item.barcode);
-            setHistoryErrors((current) => ({ ...current, [item.barcode]: "This scan has not saved to your history. You can still view its comparison." }));
+          historyFailures.current.add(key);
+          if (mounted.current && accountRef.current === owner && sessionStatusRef.current === ownerStatus) {
+            setHistoryErrors((current) => ({ ...current, [key]: "This scan's history save is not confirmed. You can still view its comparison." }));
           }
         } finally {
-          recordingHistory.current.delete(item.barcode);
+          recordingHistory.current.delete(key);
           if (mounted.current) setWorkVersion((version) => version + 1);
         }
       })();
@@ -172,7 +200,6 @@ export const ScanQueue = forwardRef<ScanQueueHandle>(function ScanQueue(_, ref) 
   useEffect(() => {
     setSaveStates({});
     setSelected(new Set());
-    historyFailures.current.clear();
     setHistoryErrors({});
   }, [accountKey]);
 
@@ -198,12 +225,13 @@ export const ScanQueue = forwardRef<ScanQueueHandle>(function ScanQueue(_, ref) 
     batchBusyRef.current = true;
     setBatchBusy(true);
     await runBounded(candidates, SCAN_SAVE_CONCURRENCY, async (item) => {
-      if (!mounted.current || accountRef.current !== owner || !itemsRef.current.some((row) => row.barcode === item.barcode)) return;
+      const shouldProceed = () => mounted.current && accountRef.current === owner && sessionStatusRef.current === ownerStatus && itemsRef.current.some((row) => historyKey(row) === historyKey(item));
+      if (!shouldProceed() || !owner) return;
       saving.current.add(item.barcode);
       setSaveStates((current) => ({ ...current, [item.barcode]: { status: "saving", message: ownerStatus === "authenticated" ? "Saving to your account…" : "Saving on this device…" } }));
       try {
         if (ownerStatus === "authenticated") {
-          const result = await addCloudFavourite(item.barcode, item.productName || item.barcode);
+          const result = await addCloudFavourite(item.barcode, item.productName || item.barcode, { expectedIdentity: owner, shouldProceed });
           if (result.favourite?.barcode !== item.barcode) throw new Error("The save was not confirmed. Retry this product.");
         } else if (!isGuestFavourite(item.barcode)) {
           if (readGuestFavourites().length >= SCAN_QUEUE_LIMIT) throw new Error("You have 100 device favourites. Remove a favourite before saving more.");
@@ -231,13 +259,27 @@ export const ScanQueue = forwardRef<ScanQueueHandle>(function ScanQueue(_, ref) 
     commit((current) => current.map((item) => (!barcode || item.barcode === barcode) && (item.status === "queued" || item.status === "loading") ? { ...item, status: "cancelled", error: "Comparison cancelled. Retry when you are ready." } : item));
   };
   const retry = (barcode: string) => commit((current) => current.map((item) => item.barcode === barcode ? { ...item, status: "queued", error: null, offer: null } : item));
+  const retryHistory = (item: ScanQueueItem) => {
+    const key = historyKey(item);
+    if (status === "loading" || !accountKey || recordingHistory.current.has(key)) return;
+    if (!window.confirm("An earlier save may have completed. Check your history first; retrying may create a duplicate. Retry this save for the current account?")) return;
+    historyCandidates.current.set(key, { owner: accountKey, ownerStatus: status });
+    historyFailures.current.delete(key);
+    setHistoryErrors((current) => { const next = { ...current }; delete next[key]; return next; });
+    setWorkVersion((version) => version + 1);
+  };
   const remove = (barcode: string) => {
+    const item = itemsRef.current.find((row) => row.barcode === barcode);
+    if (item) {
+      const key = historyKey(item);
+      historyCandidates.current.delete(key);
+      historyFailures.current.delete(key);
+      setHistoryErrors((current) => { const next = { ...current }; delete next[key]; return next; });
+    }
     comparisons.current.get(barcode)?.abort();
     commit((current) => current.filter((item) => item.barcode !== barcode));
     setSelected((current) => { const next = new Set(current); next.delete(barcode); return next; });
     setSaveStates((current) => { const next = { ...current }; delete next[barcode]; return next; });
-    setHistoryErrors((current) => { const next = { ...current }; delete next[barcode]; return next; });
-    historyFailures.current.delete(barcode);
   };
   const clear = () => {
     if (!window.confirm("Clear this scan queue? Your saved favourites and history will stay.")) return;
@@ -247,6 +289,7 @@ export const ScanQueue = forwardRef<ScanQueueHandle>(function ScanQueue(_, ref) 
     setSaveStates({});
     setHistoryErrors({});
     historyFailures.current.clear();
+    historyCandidates.current.clear();
     setNotice("Queue cleared. Your favourites and history have not been removed.");
   };
   const selectable = items.filter((item) => !saved.has(item.barcode));
@@ -273,17 +316,21 @@ export const ScanQueue = forwardRef<ScanQueueHandle>(function ScanQueue(_, ref) 
       const saveState = saveStates[item.barcode];
       const isSaved = saved.has(item.barcode);
       const working = item.status === "queued" || item.status === "loading";
-      return <li className="scan-queue-item" key={item.barcode}>
+      const key = historyKey(item);
+      const recording = recordingHistory.current.has(key);
+      const candidate = historyCandidates.current.get(key);
+      const historyNeedsRetry = historyFailures.current.has(key) || !candidate || (candidate.owner !== null && (candidate.owner !== accountKey || candidate.ownerStatus !== status));
+      return <li className="scan-queue-item" key={key}>
         <div className="scan-queue-product"><label className="scan-queue-select"><input type="checkbox" checked={selected.has(item.barcode)} disabled={!favouritesReady || isSaved || batchBusy} aria-label={`Select ${item.productName || `barcode ${item.barcode}`} for saving`} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(item.barcode); else next.delete(item.barcode); return next; })} /></label><div><h3>{item.productName || "Product name unavailable"}</h3><p>Barcode {item.barcode} · {item.source === "camera" ? "Camera scan" : "Manual entry"}</p></div></div>
         <p className={`scan-queue-status status-${item.status}`} role="status">{labels[item.status]}</p>
         {item.offer && <div className="scan-queue-offer"><strong>R{item.offer.price.toFixed(2)}</strong><span>Lowest returned price at {retailerName(item.offer.retailer)}</span><small>{item.offer.stale ? "Saved comparison, may be out of date. " : item.offer.fromCache ? "Retailer price from cache. " : ""}{item.offer.updatedAt ? `Source updated ${new Date(item.offer.updatedAt).toLocaleString("en-ZA")}.` : "Source update time unavailable."}</small></div>}
         {item.checkedAt && <small className="scan-queue-checked">Compared {new Date(item.checkedAt).toLocaleString("en-ZA")}</small>}
         {item.error && <p className="scan-queue-error" role="status">{item.error}</p>}
-        {historyErrors[item.barcode] && <div className="scan-queue-error" role="status"><p>{historyErrors[item.barcode]}</p><button className="button button-secondary" type="button" onClick={() => { if (!window.confirm("An earlier save may have completed. Check your history first; retrying may create a duplicate. Retry this save?")) return; historyFailures.current.delete(item.barcode); setHistoryErrors((current) => { const next = { ...current }; delete next[item.barcode]; return next; }); setWorkVersion((version) => version + 1); }}>Retry history save</button></div>}
+        {!item.historyRecorded && (item.status === "success" || item.status === "missing") && <div className={historyNeedsRetry ? "scan-queue-error" : "scan-queue-save-note"} role="status"><p>{historyErrors[key] || (recording ? "Saving this scan to history…" : historyNeedsRetry ? "This scan's history save is not confirmed. Check your history before retrying for the current account." : "This scan's history save is pending confirmation.")}</p>{historyNeedsRetry && <button className="button button-secondary" type="button" disabled={recording || status === "loading" || !accountKey} onClick={() => retryHistory(item)}>Retry history save</button>}</div>}
         <div className="scan-queue-row-actions"><Link className="button button-secondary" href={`/result?barcode=${item.barcode}&from=${item.historyRecorded ? "scan-queue" : "scan-queue-pending"}`}>View comparison</Link>
           {working ? <button className="button button-secondary" type="button" onClick={() => cancel(item.barcode)}>Cancel comparison</button> : <button className="button button-secondary" type="button" onClick={() => retry(item.barcode)}>{item.status === "success" ? "Recheck price" : "Retry comparison"}</button>}
           <button className="button button-primary" type="button" disabled={!favouritesReady || isSaved || batchBusy} onClick={() => void saveProducts([item.barcode])}>{isSaved ? "Saved favourite" : saveState?.status === "error" ? "Retry save" : item.productName ? "Save favourite" : "Save barcode"}</button>
-          <button className="button button-secondary" type="button" disabled={batchBusy || recordingHistory.current.has(item.barcode)} onClick={() => remove(item.barcode)}>Remove</button></div>
+          <button className="button button-secondary" type="button" disabled={batchBusy || recording} onClick={() => remove(item.barcode)}>Remove</button></div>
         {saveState && <p className={saveState.status === "error" ? "scan-queue-error" : "scan-queue-save-note"} role="status">{saveState.message}</p>}
       </li>;
     })}</ol>
